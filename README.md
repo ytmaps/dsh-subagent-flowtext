@@ -19,6 +19,19 @@ Install the package into the Harness Profile that should own the provider:
 dsh plugin --profile web add dsh-subagent-flowtext
 ```
 
+Before the npm registry release, install directly from the public GitHub
+repository:
+
+```sh
+dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
+```
+
+Git-hosted installation builds the TypeScript source through `prepare`. pnpm
+10 or newer blocks dependency build scripts until explicitly allowed. If the
+first command prints an `allowBuilds` key, add the exact key to that Profile's
+`pnpm-workspace.yaml`, then run the command again. Pin a commit when a deployment
+must not follow later changes to `main`.
+
 The bundled provider row is disabled after installation because it cannot start safely without a token. Set the token outside the repository, then replace or enable the row in the Profile's `cordis.patch.yml`:
 
 ```sh
