@@ -25,7 +25,7 @@ dsh plugin --profile web add dsh-subagent-flowtext
 dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
 ```
 
-GitHub 安装会通过 `prepare` 构建 TypeScript 源码。pnpm 10 及更高版本会默认禁止依赖构建脚本；如果首次命令输出 `allowBuilds` 提示，请把它打印的精确包键加入该 Profile 的 `pnpm-workspace.yaml`，然后重新执行安装命令。生产部署建议锁定具体 commit，避免自动跟随 `main` 后续变更。
+仓库中已包含经审查的预编译 `dist` 入口，因此 GitHub 源安装或插件市场安装不会执行依赖构建脚本，也不需要 pnpm `allowBuilds` 授权。生产部署建议锁定具体 commit，避免自动跟随 `main` 后续变更。
 
 安装后的 Provider 配置行默认禁用，防止尚未配置令牌时导致 Harness 启动失败。请在仓库外设置令牌，然后在 Profile 的 `cordis.patch.yml` 中替换或启用该配置行：
 
@@ -66,6 +66,10 @@ export FLOWTEXT_AGENT_TOKEN='从-FlowText-设置中复制'
 修改组合配置后重启 Profile，父 Agent 即可通过 `subagent_flowtext` 委派任务。
 
 仓库维护者请按 [PUBLISHING.md](PUBLISHING.md) 完成首次 npm 发布，并在后续版本使用无长期令牌的 GitHub Actions 可信发布。
+
+## 插件市场发现
+
+DeepSeek Harness 当前使用 GitHub `dsh-plugin` Topic 作为官方明确的社区发现约定；内置 Plugins 设置页只展示已安装的 Loader 条目，并非官方下载市场。独立社区市场可收录本仓库，并使用上述 GitHub 源命令直接安装。市场收录不代表 DeepSeek 的安全背书；安装前应审查本包及其请求的 FlowText 权限策略。
 
 ## 配置
 
