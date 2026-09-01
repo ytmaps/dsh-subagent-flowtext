@@ -1,0 +1,92 @@
+{
+  "name": "dsh-subagent-flowtext",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness one-shot SubagentProvider for the FlowText Agent Gateway",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "flowtext",
+    "obsidian",
+    "subagent",
+    "cordis"
+  ],
+  "license": "MIT",
+  "author": "ytmaps",
+  "type": "module",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./run": {
+      "types": "./dist/run.d.ts",
+      "default": "./dist/run.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "default": "./dist/protocol.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "PUBLISHING.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ytmaps/dsh-subagent-flowtext.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ytmaps/dsh-subagent-flowtext/issues"
+  },
+  "homepage": "https://github.com/ytmaps/dsh-subagent-flowtext#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "pack:check": "npm run build && publint && npm pack --dry-run",
+    "prepublishOnly": "npm run test && npm run pack:check"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1-rc.1 <5",
+    "@deepseek-ai/dsh-llm": ">=0.0.1-rc.1 <1",
+    "@deepseek-ai/dsh-session": ">=0.0.1-rc.1 <1",
+    "@deepseek-ai/dsh-subagent": ">=0.0.1-rc.1 <1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-session": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-subagent": "^0.0.1-rc.1",
+    "@types/node": "^22.20.0",
+    "publint": "^0.3.21",
+    "typescript": "^6.0.3"
+  }
+}
