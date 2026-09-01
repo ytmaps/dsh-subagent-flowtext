@@ -9,7 +9,7 @@ GitHub repository `ytmaps/dsh-subagent-flowtext`.
    `repository.url` in `package.json`.
 2. Use Node.js 24 and run `npm ci`, `npm test`, and `npm run pack:check`.
 3. Confirm that `dsh-subagent-flowtext` is still available on npm.
-4. Sign in to npm with publishing 2FA and publish `0.1.0` once from the public
+4. Sign in to npm with publishing 2FA and publish the current version once from the public
    repository checkout:
 
    ```sh

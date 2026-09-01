@@ -9,7 +9,6 @@
 - Node.js `^22.19.0` 或 `>=24`
 - 安装了 `@deepseek-ai/dsh-subagent` 的 DeepSeek Harness
 - Obsidian 桌面端已启用 FlowText Agent Gateway
-- FlowText Gateway 访问令牌
 
 ## 安装
 
@@ -27,43 +26,9 @@ dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
 
 仓库中已包含经审查的预编译 `dist` 入口，因此 GitHub 源安装或插件市场安装不会执行依赖构建脚本，也不需要 pnpm `allowBuilds` 授权。生产部署建议锁定具体 commit，避免自动跟随 `main` 后续变更。
 
-安装后的 Provider 配置行默认禁用，防止尚未配置令牌时导致 Harness 启动失败。请在仓库外设置令牌，然后在 Profile 的 `cordis.patch.yml` 中替换或启用该配置行：
+安装包会同时启用 Provider 和 `subagent_flowtext` 工具，无需环境变量、复制 Token 或编辑 `cordis.patch.yml`。重启 Harness 后第一次调用该工具时，FlowText 会弹出“允许 DeepSeek Harness 连接？”确认框。用户允许一次后，插件把凭据保存在本机 DSH 凭据目录的 mode-0600 文件中；后续启动自动复用。FlowText 重新生成 Gateway Token 后，下一次调用会自动重新发起配对。
 
-```sh
-export FLOWTEXT_AGENT_TOKEN='从-FlowText-设置中复制'
-```
-
-```yaml
-- id: subagent-flowtext
-  name: dsh-subagent-flowtext
-  config:
-    providerName: flowtext
-    baseUrl: http://127.0.0.1:27124/flowtext-agent/v1
-    token: !!js process.env.FLOWTEXT_AGENT_TOKEN
-    approvalDecision: deny
-    policy:
-      allowRead: true
-      allowWrite: true
-      allowWeb: true
-      allowCli: false
-      allowImageGeneration: false
-      deniedPaths:
-        - .obsidian
-```
-
-在对应的 Agent Preset 或 Profile 层将模型工具绑定到该 Provider：
-
-```yaml
-- id: tool-subagent-flowtext
-  name: '@deepseek-ai/dsh-tool-subagent'
-  config:
-    provider: flowtext
-    toolName: subagent_flowtext
-    backgroundMode: one-shot
-    maxDepth: provider-managed
-```
-
-修改组合配置后重启 Profile，父 Agent 即可通过 `subagent_flowtext` 委派任务。
+旧版本留下的手写 `subagent-flowtext`、`tool-subagent-flowtext` Profile 覆盖行可以删除，以免覆盖安装包的新默认配置。
 
 仓库维护者请按 [PUBLISHING.md](PUBLISHING.md) 完成首次 npm 发布，并在后续版本使用无长期令牌的 GitHub Actions 可信发布。
 
@@ -77,7 +42,10 @@ DeepSeek Harness 当前使用 GitHub `dsh-plugin` Topic 作为官方明确的社
 |---|---:|---|
 | `providerName` | `flowtext` | Harness Provider 注册名称。 |
 | `baseUrl` | `http://127.0.0.1:27124/flowtext-agent/v1` | FlowText v1 地址。发送令牌前会拒绝非本机 HTTP 地址。 |
-| `token` | 必填 | Gateway Bearer Token；应使用环境变量表达式。 |
+| `autoPair` | `true` | 未找到本机凭据时，请求 FlowText 弹窗授权并自动保存凭据。 |
+| `credentialPath` | `$DSH_HOME/credentials/dsh-subagent-flowtext.json` | 可选的凭据文件覆盖路径；默认文件权限为 mode 0600。 |
+| `clientName` | `DeepSeek Harness` | FlowText 配对确认框显示的客户端名称。 |
+| `token` | 未设置 | 仅用于旧部署的手动 Bearer Token；普通用户不需要配置。 |
 | `clientId` | `deepseek-harness` | 用于 FlowText 任务恢复的稳定客户端标识。 |
 | `modelId` | 未设置 | 每次任务使用的可选 FlowText 模型。 |
 | `activePath` | 未设置 | 可选的库内活动笔记路径；不会把父 Session cwd 转成 Obsidian 路径。 |
@@ -98,6 +66,8 @@ DeepSeek Harness 当前使用 GitHub `dsh-plugin` Topic 作为官方明确的社
 只有 FlowText 接受带 `clientId + requestId` 幂等键的任务后，`start()` 才发布远程 Run。Run 通过长轮询等待增量事件，并读取权威任务快照。父请求取消和 `dispose()` 都会请求远端取消并等待本地结果收敛；重复释放是安全的。
 
 一次性 `SubagentProvider` 无法表达 FlowText 的结构化追问，因此遇到追问时会取消远端任务并返回 `stopReason: error`。审批按照 Provider 配置自动处理，默认拒绝。网络、协议、超时、FlowText 重启和答案过大等失败只返回有长度限制的安全诊断，不包含令牌、请求体、文件内容或原始响应。
+
+自动配对只接受本机回环连接，拒绝带浏览器 `Origin` 的请求，并且必须由用户在 Obsidian 中明确允许。凭据不会写入 Profile、仓库、命令历史或模型上下文。
 
 该 Provider 不声明结构化输出、深度限制、工具过滤、Persona 或父上下文继承能力，也不会实现 `prepareContinuable`。FlowText 持有远端任务，Harness 只持有一次性 Run。
 

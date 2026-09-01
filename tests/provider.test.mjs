@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { FlowTextClient, FlowTextClientError } from '../dist/client.js'
+import { FileCredentialStore } from '../dist/credentials.js'
 import { apply } from '../dist/index.js'
 import { startFlowTextRun } from '../dist/run.js'
 
@@ -83,7 +87,7 @@ test('Cordis plugin registers a remote provider with no unsupported capabilities
   apply({
     subagents: { registerProvider(value) { provider = value; return () => undefined } },
     logger: { warn() {} },
-  }, { token: TOKEN })
+  }, {})
   assert.equal(provider.name, 'flowtext')
   assert.equal(provider.inheritsParentContext, false)
   assert.deepEqual(provider.capabilities, {
@@ -93,6 +97,71 @@ test('Cordis plugin registers a remote provider with no unsupported capabilities
     persona: false,
   })
   assert.equal(provider.prepareContinuable, undefined)
+})
+
+test('client pairs once, persists the credential, and reuses it for requests', async () => {
+  let pairCount = 0
+  let saved
+  const store = {
+    async load() { return saved },
+    async save(_baseUrl, token) { saved = token },
+    async clear() { saved = undefined },
+  }
+  const server = createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url === '/flowtext-agent/v1/pair') {
+      pairCount += 1
+      assert.equal(req.headers.authorization, undefined)
+      assert.equal(req.headers['content-type'], 'application/json')
+      const chunks = []
+      for await (const chunk of req) chunks.push(chunk)
+      assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString('utf8')), {
+        clientId: 'test-harness',
+        clientName: 'DeepSeek Harness',
+      })
+      json(res, 200, { token: TOKEN, tokenType: 'Bearer' })
+      return
+    }
+    assert.equal(req.headers.authorization, `Bearer ${TOKEN}`)
+    json(res, 200, { task: { taskId: 'paired', clientId: 'test-harness', status: 'running', lastSeq: 1 } })
+  })
+  servers.push(server)
+  await new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  const baseUrl = `http://127.0.0.1:${address.port}/flowtext-agent/v1`
+  const paired = new FlowTextClient({
+    baseUrl,
+    autoPair: true,
+    clientId: 'test-harness',
+    clientName: 'DeepSeek Harness',
+    credentialStore: store,
+    requestTimeoutMs: 500,
+    longPollMs: 10,
+    maxResponseBytes: 64 * 1024,
+  })
+  assert.equal((await paired.getTask('paired', new AbortController().signal)).taskId, 'paired')
+  assert.equal((await paired.getTask('paired', new AbortController().signal)).taskId, 'paired')
+  assert.equal(pairCount, 1)
+  assert.equal(saved, TOKEN)
+})
+
+test('file credential store persists only the matching endpoint with owner-only permissions', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'flowtext-credential-'))
+  try {
+    const path = join(directory, 'nested', 'credential.json')
+    const store = new FileCredentialStore(path)
+    const baseUrl = 'http://127.0.0.1:27124/flowtext-agent/v1'
+    await store.save(baseUrl, TOKEN)
+    assert.equal(await store.load(baseUrl), TOKEN)
+    assert.equal(await store.load('http://127.0.0.1:27125/flowtext-agent/v1'), undefined)
+    assert.equal((await stat(path)).mode & 0o777, 0o600)
+    await store.clear(baseUrl)
+    assert.equal(await store.load(baseUrl), undefined)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('provider returns the terminal FlowText answer and sends an idempotency key', async () => {

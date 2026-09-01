@@ -1,8 +1,15 @@
-# Install-time bundle: dormant until the Profile supplies a Gateway token and enables the row.
+# Install-time bundle: ready immediately; the first invocation securely pairs with FlowText.
 - insert:
     - id: subagent-flowtext
       name: dsh-subagent-flowtext
-      disabled: true
       config:
         providerName: flowtext
-        token: !!js process.env.FLOWTEXT_AGENT_TOKEN
+        autoPair: true
+        clientName: DeepSeek Harness
+    - id: tool-subagent-flowtext
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: flowtext
+        toolName: subagent_flowtext
+        backgroundMode: one-shot
+        maxDepth: provider-managed

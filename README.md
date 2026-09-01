@@ -9,7 +9,6 @@
 - Node.js `^22.19.0` or `>=24`
 - DeepSeek Harness with `@deepseek-ai/dsh-subagent`
 - Obsidian desktop with FlowText Agent Gateway enabled
-- A FlowText Gateway token
 
 ## Install
 
@@ -31,43 +30,9 @@ GitHub-source or marketplace installation does not execute a dependency build
 script and needs no pnpm `allowBuilds` grant. Pin a commit when a deployment
 must not follow later changes to `main`.
 
-The bundled provider row is disabled after installation because it cannot start safely without a token. Set the token outside the repository, then replace or enable the row in the Profile's `cordis.patch.yml`:
+The bundle enables both the Provider and the model-facing `subagent_flowtext` tool. No environment variable, token copy, or Profile edit is required. On the first invocation after restarting Harness, FlowText shows an “Allow DeepSeek Harness to connect?” confirmation. One approval stores the credential in a local mode-0600 file under the DSH credentials directory. Later starts reuse it automatically; rotating the FlowText Gateway token causes the next invocation to pair again.
 
-```sh
-export FLOWTEXT_AGENT_TOKEN='copy-from-flowtext-settings'
-```
-
-```yaml
-- id: subagent-flowtext
-  name: dsh-subagent-flowtext
-  config:
-    providerName: flowtext
-    baseUrl: http://127.0.0.1:27124/flowtext-agent/v1
-    token: !!js process.env.FLOWTEXT_AGENT_TOKEN
-    approvalDecision: deny
-    policy:
-      allowRead: true
-      allowWrite: true
-      allowWeb: true
-      allowCli: false
-      allowImageGeneration: false
-      deniedPaths:
-        - .obsidian
-```
-
-Bind a model-facing tool to the provider in the applicable Agent Preset or Profile layer:
-
-```yaml
-- id: tool-subagent-flowtext
-  name: '@deepseek-ai/dsh-tool-subagent'
-  config:
-    provider: flowtext
-    toolName: subagent_flowtext
-    backgroundMode: one-shot
-    maxDepth: provider-managed
-```
-
-Restart the Profile after editing its composition. The parent model can then delegate through `subagent_flowtext`.
+Remove any hand-written `subagent-flowtext` or `tool-subagent-flowtext` Profile override rows left by an older release so they do not shadow the bundle defaults.
 
 Repository maintainers should follow [PUBLISHING.md](PUBLISHING.md) for the
 first npm publication and subsequent tokenless GitHub Actions releases.
@@ -88,7 +53,10 @@ requested FlowText policy before installation.
 |---|---:|---|
 | `providerName` | `flowtext` | Name registered in the Harness provider registry. |
 | `baseUrl` | `http://127.0.0.1:27124/flowtext-agent/v1` | FlowText v1 endpoint. Non-loopback or HTTPS endpoints are rejected before the token can be sent. |
-| `token` | required | Gateway Bearer token. Use an environment expression rather than plaintext configuration. |
+| `autoPair` | `true` | Ask FlowText for interactive local authorization when no stored credential exists. |
+| `credentialPath` | `$DSH_HOME/credentials/dsh-subagent-flowtext.json` | Optional credential-file override; the default file uses mode 0600. |
+| `clientName` | `DeepSeek Harness` | Client name shown in the FlowText pairing prompt. |
+| `token` | unset | Legacy explicit Bearer token; normal users do not configure it. |
 | `clientId` | `deepseek-harness` | Stable owner used by FlowText task recovery. |
 | `modelId` | unset | Optional model configured in FlowText for every run. |
 | `activePath` | unset | Optional vault-relative active note. No parent cwd is converted into an Obsidian path. |
@@ -109,6 +77,8 @@ requested FlowText policy before installation.
 `start()` publishes only after FlowText accepts an idempotent task identified by `clientId + requestId`. The run long-polls incremental events and reads authoritative task snapshots. Parent cancellation and `dispose()` both request remote cancellation and wait for local result settlement; disposal is idempotent.
 
 FlowText clarification requests cannot be represented by the one-shot `SubagentProvider` API, so the Provider cancels that task and returns `stopReason: error`. Approval requests are resolved with the configured unattended decision, which defaults to `deny`. Network, protocol, timeout, restart, and oversized-answer failures return bounded diagnostics without tokens, request bodies, file contents, or raw server payloads.
+
+Automatic pairing accepts loopback clients only, rejects browser-originated requests, and requires an explicit approval in Obsidian. Credentials never enter the Profile, repository, shell history, or model context.
 
 The Provider advertises no output-schema, depth-limit, tool-filter, persona, or parent-context inheritance capabilities. It intentionally does not implement `prepareContinuable`; FlowText owns the remote task and Harness owns the one-shot run.
 

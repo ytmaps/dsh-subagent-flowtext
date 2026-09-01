@@ -1,6 +1,7 @@
 /** DeepSeek Harness one-shot SubagentProvider for FlowText Agent Gateway v1. */
 import z from '@deepseek-ai/schemastery';
 import { FlowTextClient } from './client.js';
+import { FileCredentialStore } from './credentials.js';
 import { startFlowTextRun } from './run.js';
 export const name = 'subagent-flowtext';
 export const inject = ['subagents'];
@@ -22,7 +23,10 @@ const PolicySchema = z.object({
 export const Config = z.object({
     providerName: z.string().min(1).default('flowtext'),
     baseUrl: z.string().default(DEFAULT_BASE_URL),
-    token: z.string().min(24).required(),
+    token: z.string().min(24),
+    autoPair: z.boolean().default(true),
+    credentialPath: z.string(),
+    clientName: z.string().min(1).default('DeepSeek Harness'),
     clientId: z.string().min(1).default('deepseek-harness'),
     modelId: z.string(),
     activePath: z.string(),
@@ -86,9 +90,12 @@ export function apply(ctx, config) {
         providerName: config.providerName ?? 'flowtext',
         baseUrl: config.baseUrl ?? DEFAULT_BASE_URL,
         token: config.token,
+        autoPair: config.autoPair ?? true,
+        credentialPath: config.credentialPath,
+        clientName: config.clientName ?? 'DeepSeek Harness',
         clientId: config.clientId ?? 'deepseek-harness',
-        ...(config.modelId === undefined ? {} : { modelId: config.modelId }),
-        ...(config.activePath === undefined ? {} : { activePath: config.activePath }),
+        modelId: config.modelId,
+        activePath: config.activePath,
         contextPaths: config.contextPaths ?? [],
         policy: config.policy ?? {},
         runOptions: config.runOptions ?? {},
@@ -106,7 +113,11 @@ export function apply(ctx, config) {
     assertPositiveInteger('maxAnswerBytes', resolved.maxAnswerBytes, 16 * 1024 * 1024);
     const client = new FlowTextClient({
         baseUrl: resolved.baseUrl,
-        token: resolved.token,
+        autoPair: resolved.autoPair,
+        clientId: resolved.clientId,
+        clientName: resolved.clientName,
+        credentialStore: new FileCredentialStore(resolved.credentialPath),
+        ...(resolved.token === undefined ? {} : { token: resolved.token }),
         requestTimeoutMs: resolved.requestTimeoutMs,
         longPollMs: resolved.longPollMs,
         maxResponseBytes: resolved.maxResponseBytes,

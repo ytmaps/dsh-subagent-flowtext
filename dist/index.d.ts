@@ -11,8 +11,14 @@ export interface Config {
     providerName?: string;
     /** FlowText Gateway v1 base URL. Only loopback HTTP URLs are accepted. */
     baseUrl?: string;
-    /** FlowText Bearer token. Prefer `!!js process.env.FLOWTEXT_AGENT_TOKEN`. */
-    token: string;
+    /** Optional legacy FlowText Bearer token. Omit to use secure local pairing. */
+    token?: string;
+    /** Pair automatically through a one-time FlowText approval prompt. */
+    autoPair?: boolean;
+    /** Local mode-0600 credential file override. */
+    credentialPath?: string;
+    /** Human-readable name shown by FlowText during pairing. */
+    clientName?: string;
     /** Stable client identity used for task recovery and idempotency. */
     clientId?: string;
     /** Optional FlowText model id fixed for this provider instance. */
@@ -47,3 +53,4 @@ export declare const Config: z<Config>;
 export declare function apply(ctx: Context, config: Config): void;
 export type { FlowTextApprovalDecision, FlowTextRunSpec } from './run.js';
 export type { FlowTextRunPolicy } from './protocol.js';
+export type { FlowTextCredentialStore } from './credentials.js';

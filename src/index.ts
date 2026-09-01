@@ -8,6 +8,7 @@ import type {
   SubagentProvider,
 } from '@deepseek-ai/dsh-subagent'
 import { FlowTextClient } from './client.js'
+import { FileCredentialStore } from './credentials.js'
 import type { FlowTextRunPolicy } from './protocol.js'
 import { startFlowTextRun, type FlowTextApprovalDecision, type FlowTextRunSpec } from './run.js'
 
@@ -22,8 +23,14 @@ export interface Config {
   providerName?: string
   /** FlowText Gateway v1 base URL. Only loopback HTTP URLs are accepted. */
   baseUrl?: string
-  /** FlowText Bearer token. Prefer `!!js process.env.FLOWTEXT_AGENT_TOKEN`. */
-  token: string
+  /** Optional legacy FlowText Bearer token. Omit to use secure local pairing. */
+  token?: string
+  /** Pair automatically through a one-time FlowText approval prompt. */
+  autoPair?: boolean
+  /** Local mode-0600 credential file override. */
+  credentialPath?: string
+  /** Human-readable name shown by FlowText during pairing. */
+  clientName?: string
   /** Stable client identity used for task recovery and idempotency. */
   clientId?: string
   /** Optional FlowText model id fixed for this provider instance. */
@@ -68,7 +75,10 @@ const PolicySchema = z.object({
 export const Config: z<Config> = z.object({
   providerName: z.string().min(1).default('flowtext'),
   baseUrl: z.string().default(DEFAULT_BASE_URL),
-  token: z.string().min(24).required(),
+  token: z.string().min(24),
+  autoPair: z.boolean().default(true),
+  credentialPath: z.string(),
+  clientName: z.string().min(1).default('DeepSeek Harness'),
   clientId: z.string().min(1).default('deepseek-harness'),
   modelId: z.string(),
   activePath: z.string(),
@@ -83,7 +93,12 @@ export const Config: z<Config> = z.object({
   maxAnswerBytes: z.number().default(1024 * 1024),
 })
 
-type ResolvedConfig = Required<Omit<Config, 'modelId' | 'activePath'>> & Pick<Config, 'modelId' | 'activePath'>
+type ResolvedConfig = Required<Omit<Config, 'token' | 'credentialPath' | 'modelId' | 'activePath'>> & {
+  token: string | undefined
+  credentialPath: string | undefined
+  modelId: string | undefined
+  activePath: string | undefined
+}
 
 function assertPositiveInteger(name: string, value: number, maximum: number): void {
   if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
@@ -135,9 +150,12 @@ export function apply(ctx: Context, config: Config): void {
     providerName: config.providerName ?? 'flowtext',
     baseUrl: config.baseUrl ?? DEFAULT_BASE_URL,
     token: config.token,
+    autoPair: config.autoPair ?? true,
+    credentialPath: config.credentialPath,
+    clientName: config.clientName ?? 'DeepSeek Harness',
     clientId: config.clientId ?? 'deepseek-harness',
-    ...(config.modelId === undefined ? {} : { modelId: config.modelId }),
-    ...(config.activePath === undefined ? {} : { activePath: config.activePath }),
+    modelId: config.modelId,
+    activePath: config.activePath,
     contextPaths: config.contextPaths ?? [],
     policy: config.policy ?? {},
     runOptions: config.runOptions ?? {},
@@ -155,7 +173,11 @@ export function apply(ctx: Context, config: Config): void {
   assertPositiveInteger('maxAnswerBytes', resolved.maxAnswerBytes, 16 * 1024 * 1024)
   const client = new FlowTextClient({
     baseUrl: resolved.baseUrl,
-    token: resolved.token,
+    autoPair: resolved.autoPair,
+    clientId: resolved.clientId,
+    clientName: resolved.clientName,
+    credentialStore: new FileCredentialStore(resolved.credentialPath),
+    ...(resolved.token === undefined ? {} : { token: resolved.token }),
     requestTimeoutMs: resolved.requestTimeoutMs,
     longPollMs: resolved.longPollMs,
     maxResponseBytes: resolved.maxResponseBytes,
@@ -165,3 +187,4 @@ export function apply(ctx: Context, config: Config): void {
 
 export type { FlowTextApprovalDecision, FlowTextRunSpec } from './run.js'
 export type { FlowTextRunPolicy } from './protocol.js'
+export type { FlowTextCredentialStore } from './credentials.js'

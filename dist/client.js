@@ -114,11 +114,74 @@ function boundedMessage(value) {
 export class FlowTextClient {
     options;
     baseUrl;
+    token;
+    resolvingToken;
     constructor(options) {
         this.options = options;
         this.baseUrl = assertLoopbackBaseUrl(options.baseUrl);
-        if (options.token.length < 24)
+        if (options.token !== undefined && options.token.length < 24) {
             throw new Error('subagent-flowtext: token must contain at least 24 characters');
+        }
+        this.token = options.token;
+    }
+    async acquireToken(signal) {
+        if (this.token !== undefined)
+            return this.token;
+        this.resolvingToken ??= (async () => {
+            const stored = await this.options.credentialStore?.load(this.baseUrl);
+            if (stored !== undefined) {
+                this.token = stored;
+                return stored;
+            }
+            if (this.options.autoPair === false) {
+                throw new FlowTextClientError('FlowText token is not configured and automatic pairing is disabled', 'PAIRING_DISABLED');
+            }
+            const paired = await this.pair(signal);
+            this.token = paired;
+            await this.options.credentialStore?.save(this.baseUrl, paired);
+            return paired;
+        })().finally(() => { this.resolvingToken = undefined; });
+        return this.resolvingToken;
+    }
+    async pair(signal) {
+        const timeout = AbortSignal.timeout(this.options.requestTimeoutMs);
+        let response;
+        try {
+            response = await fetch(`${this.baseUrl}/pair`, {
+                method: 'POST',
+                headers: { accept: 'application/json', 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    clientId: this.options.clientId ?? 'deepseek-harness',
+                    clientName: this.options.clientName ?? 'DeepSeek Harness',
+                }),
+                signal: AbortSignal.any([signal, timeout]),
+            });
+        }
+        catch (error) {
+            if (signal.aborted)
+                throw new FlowTextClientError('FlowText pairing was aborted', 'ABORTED');
+            if (timeout.aborted)
+                throw new FlowTextClientError('FlowText pairing timed out while waiting for approval', 'PAIRING_TIMEOUT');
+            const message = error instanceof Error ? boundedMessage(error.message) : 'network failure';
+            throw new FlowTextClientError(`FlowText pairing failed: ${message}`, 'PAIRING_NETWORK_ERROR');
+        }
+        const payload = await readJson(response, this.options.maxResponseBytes);
+        if (!response.ok) {
+            const detail = payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+                ? payload.error
+                : undefined;
+            const record = detail !== null && typeof detail === 'object' && !Array.isArray(detail)
+                ? detail
+                : undefined;
+            const code = typeof record?.code === 'string' ? boundedMessage(record.code) : 'PAIRING_FAILED';
+            const message = typeof record?.message === 'string' ? boundedMessage(record.message) : `FlowText pairing returned HTTP ${response.status}`;
+            throw new FlowTextClientError(message, code, response.status);
+        }
+        assertRecord(payload, 'FlowText pairing response');
+        if (typeof payload.token !== 'string' || payload.token.length < 24 || payload.token.length > 4096) {
+            throw new FlowTextClientError('FlowText pairing response has no valid token', 'INVALID_PAIRING_RESPONSE');
+        }
+        return payload.token;
     }
     /** Create or recover an idempotent task. */
     async createTask(input, signal) {
@@ -170,6 +233,18 @@ export class FlowTextClient {
         await this.request('POST', `/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(requestId)}/resolve`, { decision }, signal);
     }
     async request(method, path, body, signal, timeoutMs = this.options.requestTimeoutMs) {
+        const token = await this.acquireToken(signal);
+        const first = await this.requestWithToken(method, path, body, signal, timeoutMs, token);
+        if (first.response.status !== 401 || this.options.token !== undefined || this.options.autoPair === false) {
+            return this.unwrap(first.response, first.payload);
+        }
+        this.token = undefined;
+        await this.options.credentialStore?.clear(this.baseUrl);
+        const repaired = await this.acquireToken(signal);
+        const second = await this.requestWithToken(method, path, body, signal, timeoutMs, repaired);
+        return this.unwrap(second.response, second.payload);
+    }
+    async requestWithToken(method, path, body, signal, timeoutMs, token) {
         const timeout = AbortSignal.timeout(timeoutMs);
         const combined = AbortSignal.any([signal, timeout]);
         let response;
@@ -177,7 +252,7 @@ export class FlowTextClient {
             response = await fetch(`${this.baseUrl}${path}`, {
                 method,
                 headers: {
-                    authorization: `Bearer ${this.options.token}`,
+                    authorization: `Bearer ${token}`,
                     accept: 'application/json',
                     ...(body === undefined ? {} : { 'content-type': 'application/json' }),
                 },
@@ -194,6 +269,9 @@ export class FlowTextClient {
             throw new FlowTextClientError(`FlowText request failed: ${message}`, 'NETWORK_ERROR');
         }
         const payload = await readJson(response, this.options.maxResponseBytes);
+        return { response, payload };
+    }
+    unwrap(response, payload) {
         if (!response.ok) {
             let code = 'HTTP_ERROR';
             let message = `FlowText returned HTTP ${response.status}`;

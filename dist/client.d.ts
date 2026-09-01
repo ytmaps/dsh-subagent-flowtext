@@ -1,8 +1,13 @@
 import type { FlowTextCreateTaskRequest, FlowTextEventsResponse, FlowTextTaskSnapshot } from './protocol.js';
+import type { FlowTextCredentialStore } from './credentials.js';
 /** HTTP client configuration after plugin defaults are resolved. */
 export interface FlowTextClientOptions {
     readonly baseUrl: string;
-    readonly token: string;
+    readonly token?: string;
+    readonly autoPair?: boolean;
+    readonly clientId?: string;
+    readonly clientName?: string;
+    readonly credentialStore?: FlowTextCredentialStore;
     readonly requestTimeoutMs: number;
     readonly longPollMs: number;
     readonly maxResponseBytes: number;
@@ -17,7 +22,11 @@ export declare class FlowTextClientError extends Error {
 export declare class FlowTextClient {
     private readonly options;
     readonly baseUrl: string;
+    private token;
+    private resolvingToken;
     constructor(options: FlowTextClientOptions);
+    private acquireToken;
+    private pair;
     /** Create or recover an idempotent task. */
     createTask(input: FlowTextCreateTaskRequest, signal: AbortSignal): Promise<FlowTextTaskSnapshot>;
     /** Read one current task snapshot. */
@@ -29,4 +38,6 @@ export declare class FlowTextClient {
     /** Resolve a pending FlowText approval. */
     resolveApproval(taskId: string, requestId: string, decision: 'once' | 'session' | 'deny', signal: AbortSignal): Promise<void>;
     private request;
+    private requestWithToken;
+    private unwrap;
 }
