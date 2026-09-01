@@ -5,6 +5,7 @@
   "keywords": [
     "deepseek-harness",
     "dsh",
+    "dsh-plugin",
     "flowtext",
     "obsidian",
     "subagent",
@@ -66,7 +67,6 @@
   "scripts": {
     "clean": "node scripts/clean.mjs",
     "build": "npm run clean && tsc -p tsconfig.json",
-    "prepare": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "pack:check": "npm run build && publint && npm pack --dry-run",
