@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-`dsh-subagent-flowtext` 为 DeepSeek Harness 注册一个由 Obsidian FlowText Agent Gateway 驱动的远程、一次性 `SubagentProvider`。每次委派创建一个 FlowText 任务，持续读取增量事件直到任务结束，然后通过 Harness 的统一子 Agent 结果接口返回最终答案。
+`dsh-subagent-flowtext` 默认把 DeepSeek Harness 的每个用户任务直接交给 Obsidian FlowText Agent Gateway。FlowText 独占完整 Agent 循环（计划、查找、读取、写入、工具执行和收尾），DSH 只保留会话/UI 外壳并接收最终答案。插件也保留一次性 `SubagentProvider`，可在关闭直通模式后作为 `subagent_flowtext` 工具使用。
 
 ## 环境要求
 
@@ -26,7 +26,9 @@ dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
 
 仓库中已包含经审查的预编译 `dist` 入口，因此 GitHub 源安装或插件市场安装不会执行依赖构建脚本，也不需要 pnpm `allowBuilds` 授权。生产部署建议锁定具体 commit，避免自动跟随 `main` 后续变更。
 
-安装包会同时启用 Provider 和 `subagent_flowtext` 工具，无需环境变量、复制 Token 或编辑 `cordis.patch.yml`。重启 Harness 后第一次调用该工具时，FlowText 会弹出“允许 DeepSeek Harness 连接？”确认框。用户允许一次后，插件把凭据保存在本机 DSH 凭据目录的 mode-0600 文件中；后续启动自动复用。FlowText 重新生成 Gateway Token 后，下一次调用会自动重新发起配对。
+安装包默认开启直通模式，同时保留 Provider 和 `subagent_flowtext` 工具，无需环境变量、复制 Token 或编辑 `cordis.patch.yml`。重启 Harness 后提交任意任务都会直接创建 FlowText 任务，不再依赖 DSH 模型决定是否调用工具。首次任务会让 FlowText 弹出“允许 DeepSeek Harness 连接？”确认框；允许一次后，凭据保存在本机 DSH 凭据目录的 mode-0600 文件中。后续启动自动复用，FlowText 重置 Gateway Token 后也会自动重新配对。
+
+直通模式下，DSH 仍会运行一次最薄的 Agent 请求周期来领取用户消息和记录最终答案，但该周期不会调用 DeepSeek 模型，也不会在 DSH 内执行工具。适配器只把最新一条真实用户消息发送给 FlowText；DSH 系统提示、历史助手消息、插件上下文、工具目录和工具结果均不会转发。
 
 旧版本留下的手写 `subagent-flowtext`、`tool-subagent-flowtext` Profile 覆盖行可以删除，以免覆盖安装包的新默认配置。
 
@@ -41,6 +43,9 @@ DeepSeek Harness 当前使用 GitHub `dsh-plugin` Topic 作为官方明确的社
 | 字段 | 默认值 | 含义 |
 |---|---:|---|
 | `providerName` | `flowtext` | Harness Provider 注册名称。 |
+| `directMode` | `true` | 强制所有 DSH Agent 请求走 FlowText 完整任务直通；设为 `false` 恢复可选工具模式。 |
+| `directProvider` | `flowtext-direct` | 直通模式使用的 DSH LLM 路由名称。 |
+| `directModel` | `flowtext-agent` | 直通模式显示与校验使用的模型标识。 |
 | `baseUrl` | `http://127.0.0.1:27124/flowtext-agent/v1` | FlowText v1 地址。发送令牌前会拒绝非本机 HTTP 地址。 |
 | `autoPair` | `true` | 未找到本机凭据时，请求 FlowText 弹窗授权并自动保存凭据。 |
 | `credentialPath` | `$DSH_HOME/credentials/dsh-subagent-flowtext.json` | 可选的凭据文件覆盖路径；默认文件权限为 mode 0600。 |
@@ -65,7 +70,9 @@ DeepSeek Harness 当前使用 GitHub `dsh-plugin` Topic 作为官方明确的社
 
 只有 FlowText 接受带 `clientId + requestId` 幂等键的任务后，`start()` 才发布远程 Run。Run 通过长轮询等待增量事件，并读取权威任务快照。父请求取消和 `dispose()` 都会请求远端取消并等待本地结果收敛；重复释放是安全的。
 
-一次性 `SubagentProvider` 无法表达 FlowText 的结构化追问，因此遇到追问时会取消远端任务并返回 `stopReason: error`。审批按照 Provider 配置自动处理，默认拒绝。网络、协议、超时、FlowText 重启和答案过大等失败只返回有长度限制的安全诊断，不包含令牌、请求体、文件内容或原始响应。
+当前 Gateway 返回通道无法把 FlowText 的结构化追问传回 DSH 再继续同一任务，因此遇到追问时会取消远端任务并返回错误。审批按照配置自动处理，默认拒绝。网络、协议、超时、FlowText 重启和答案过大等失败只返回有长度限制的安全诊断，不包含令牌、请求体、文件内容或原始响应。
+
+直通适配器将 DSH 的模型请求重试数固定为零，避免包含写操作的完整 FlowText 任务被 DSH 重复执行。单个远端任务仍通过 Gateway 的 `clientId + requestId`、状态快照和取消协议保证一致性。
 
 自动配对只接受本机回环连接，拒绝带浏览器 `Origin` 的请求，并且必须由用户在 Obsidian 中明确允许。凭据不会写入 Profile、仓库、命令历史或模型上下文。
 
@@ -73,29 +80,29 @@ DeepSeek Harness 当前使用 GitHub `dsh-plugin` Topic 作为官方明确的社
 
 ## 模型体验
 
-### 子任务
+### 直通任务
 
 #### 模型看到什么
 
-FlowText 接收委派的文本块，以及部署固定的模型、上下文、运行参数和权限策略。它不会收到父 Harness 对话记录或父文件系统 cwd。
+FlowText 只接收最新一条真实用户消息，以及部署固定的模型、上下文、运行参数和权限策略。它不会收到 DSH 系统提示、历史对话、插件上下文、工具目录、工具结果或父文件系统 cwd。
 
 #### Token 影响
 
-FlowText 模型独立承担 Agent 循环 Token，子任务 Token 不会进入父上下文。
+FlowText 模型独立承担完整 Agent 循环 Token；DSH 不再发起用于执行任务的模型推理。
 
 #### KV Cache 影响
 
 与父请求缓存相互独立；复用由 FlowText 的模型适配器、系统指令、工具及任务上下文决定。
 
-### 父任务结果
+### DSH 最终结果
 
 #### 模型看到什么
 
-前台委派只返回 FlowText 最终答案；非正常结束通过统一子 Agent 错误和有长度限制的安全诊断返回。FlowText 的计划、Action、Observation、任务 ID、事件、日志、Token 和 Gateway Payload 不会复制到父 Session。
+DSH 只接收 FlowText 最终答案；非正常结束返回有长度限制的安全诊断。FlowText 的计划、Action、Observation、任务 ID、事件、日志、Token 和 Gateway Payload 不会复制到 DSH Session。
 
 #### Token 影响
 
-只有最终答案或错误会增加父上下文。后台任务还会使用 Harness 标准 Job 确认和结果收集消息。
+只有最终答案或错误会进入 DSH 会话记录。
 
 #### KV Cache 影响
 
@@ -103,7 +110,7 @@ FlowText 模型独立承担 Agent 循环 Token，子任务 Token 不会进入父
 
 ## 已知限制与后续工作
 
-- 每个 Run 创建一个新 FlowText 任务，不支持远端会话延续或 `prepareContinuable`。
+- 每条 DSH 用户消息创建一个新 FlowText 任务，不自动把 DSH 历史对话转成 FlowText 远端会话。
 - 只支持文本提示词和文本答案；图片及结构化输出委派会被拒绝。
 - 一次性 Provider 没有用户追问通道，因此结构化追问会安全失败。
 - 中间进度仅用于唤醒轮询，不会投影到父对话或 UI。

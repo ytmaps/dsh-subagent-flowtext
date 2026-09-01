@@ -4,6 +4,7 @@
       name: dsh-subagent-flowtext
       config:
         providerName: flowtext
+        directMode: true
         autoPair: true
         clientName: DeepSeek Harness
     - id: tool-subagent-flowtext

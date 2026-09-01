@@ -2,7 +2,7 @@
 
 [中文](README.zh.md)
 
-`dsh-subagent-flowtext` registers a remote, one-shot DeepSeek Harness `SubagentProvider` backed by the FlowText Agent Gateway in Obsidian. A delegation creates one FlowText task, follows its event stream until terminal settlement, and returns only the final FlowText answer through the shared Harness subagent result API.
+`dsh-subagent-flowtext` routes every DeepSeek Harness user task directly to the FlowText Agent Gateway in Obsidian by default. FlowText owns the complete agent loop—planning, search, reads, writes, tools, and finalization—while DSH retains only its session/UI shell and receives the final answer. The one-shot `SubagentProvider` remains available as an optional tool when direct mode is disabled.
 
 ## Requirements
 
@@ -30,7 +30,9 @@ GitHub-source or marketplace installation does not execute a dependency build
 script and needs no pnpm `allowBuilds` grant. Pin a commit when a deployment
 must not follow later changes to `main`.
 
-The bundle enables both the Provider and the model-facing `subagent_flowtext` tool. No environment variable, token copy, or Profile edit is required. On the first invocation after restarting Harness, FlowText shows an “Allow DeepSeek Harness to connect?” confirmation. One approval stores the credential in a local mode-0600 file under the DSH credentials directory. Later starts reuse it automatically; rotating the FlowText Gateway token causes the next invocation to pair again.
+The bundle enables direct mode and retains both the Provider and `subagent_flowtext` tool. No environment variable, token copy, or Profile edit is required. After restarting Harness, every task creates a FlowText task directly instead of asking a DSH model whether to invoke a tool. The first task shows an “Allow DeepSeek Harness to connect?” confirmation in FlowText. One approval stores the credential in a local mode-0600 file under the DSH credentials directory; later starts and token repair are automatic.
+
+DSH still performs one minimal request cycle to claim the user message and record the final answer. That cycle does not invoke the DeepSeek model or execute DSH tools. Only the latest real user message is sent to FlowText; DSH system prompts, assistant history, plugin context, tool catalogs, and tool results are not forwarded.
 
 Remove any hand-written `subagent-flowtext` or `tool-subagent-flowtext` Profile override rows left by an older release so they do not shadow the bundle defaults.
 
@@ -52,6 +54,9 @@ requested FlowText policy before installation.
 | Field | Default | Meaning |
 |---|---:|---|
 | `providerName` | `flowtext` | Name registered in the Harness provider registry. |
+| `directMode` | `true` | Force every DSH agent request through a complete FlowText task; set `false` for optional tool mode. |
+| `directProvider` | `flowtext-direct` | DSH LLM route used by direct mode. |
+| `directModel` | `flowtext-agent` | Display and validation model id used by direct mode. |
 | `baseUrl` | `http://127.0.0.1:27124/flowtext-agent/v1` | FlowText v1 endpoint. Non-loopback or HTTPS endpoints are rejected before the token can be sent. |
 | `autoPair` | `true` | Ask FlowText for interactive local authorization when no stored credential exists. |
 | `credentialPath` | `$DSH_HOME/credentials/dsh-subagent-flowtext.json` | Optional credential-file override; the default file uses mode 0600. |
@@ -76,7 +81,9 @@ requested FlowText policy before installation.
 
 `start()` publishes only after FlowText accepts an idempotent task identified by `clientId + requestId`. The run long-polls incremental events and reads authoritative task snapshots. Parent cancellation and `dispose()` both request remote cancellation and wait for local result settlement; disposal is idempotent.
 
-FlowText clarification requests cannot be represented by the one-shot `SubagentProvider` API, so the Provider cancels that task and returns `stopReason: error`. Approval requests are resolved with the configured unattended decision, which defaults to `deny`. Network, protocol, timeout, restart, and oversized-answer failures return bounded diagnostics without tokens, request bodies, file contents, or raw server payloads.
+The current Gateway return channel cannot round-trip a structured FlowText clarification through DSH and resume the same task, so clarification cancels the remote task and returns an error. Approval requests use the configured unattended decision, which defaults to `deny`. Network, protocol, timeout, restart, and oversized-answer failures return bounded diagnostics without tokens, request bodies, file contents, or raw server payloads.
+
+The direct adapter fixes the DSH model-request retry count at zero so a complete FlowText task containing writes cannot be executed twice by the Harness retry layer. Gateway `clientId + requestId`, authoritative snapshots, and cancellation still protect the single remote task.
 
 Automatic pairing accepts loopback clients only, rejects browser-originated requests, and requires an explicit approval in Obsidian. Credentials never enter the Profile, repository, shell history, or model context.
 
@@ -84,29 +91,29 @@ The Provider advertises no output-schema, depth-limit, tool-filter, persona, or 
 
 ## Model Experience
 
-### Child request
+### Direct task
 
 #### What the model sees
 
-FlowText receives the delegated text blocks as one standalone task plus the deployment-fixed model, context, run options, and policy. It does not receive the parent Harness transcript or parent filesystem cwd.
+FlowText receives only the latest real user message plus deployment-fixed model, context, run options, and policy. It does not receive DSH system prompts, history, plugin context, tool catalogs, tool results, or the parent filesystem cwd.
 
 #### Token effect
 
-The FlowText model pays for an independent Agent loop. Child tokens do not enter the parent context.
+The FlowText model pays for the complete Agent loop. DSH makes no task-execution model call.
 
 #### KV Cache effect
 
 Independent of the parent request cache. Reuse is controlled by FlowText's model adapter, instructions, tools, and retained task context.
 
-### Parent result
+### DSH result
 
 #### What the model sees
 
-A foreground delegation returns only the final FlowText answer. A non-completed task returns the shared subagent error with a bounded safe diagnostic. FlowText plans, actions, observations, task ids, events, logs, tokens, and Gateway payloads are not copied into the parent Session.
+DSH receives only the final FlowText answer. A non-completed task returns a bounded safe diagnostic. FlowText plans, actions, observations, task ids, events, logs, tokens, and Gateway payloads are not copied into the DSH Session.
 
 #### Token effect
 
-Only the retained final answer or error grows the parent context. Background execution additionally uses the normal Harness Job acknowledgement and collection messages.
+Only the retained final answer or error enters the DSH conversation log.
 
 #### KV Cache effect
 
@@ -114,7 +121,7 @@ Append-only: the result is appended after the reusable parent prefix and does no
 
 ## Known Limitations and Deferred Work
 
-- One fresh FlowText task per run; no remote conversation continuation or `prepareContinuable` support.
+- One fresh FlowText task per DSH user message; DSH history is not automatically converted into a continued FlowText session.
 - Text prompts and final text answers only; image and structured-output delegation are rejected.
 - Clarifications fail closed because the one-shot provider interface has no user-question channel.
 - Intermediate FlowText progress is consumed for wakeups but is not projected into the parent transcript or UI.

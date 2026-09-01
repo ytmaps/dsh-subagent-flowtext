@@ -9,11 +9,16 @@ import type {
 } from '@deepseek-ai/dsh-subagent'
 import { FlowTextClient } from './client.js'
 import { FileCredentialStore } from './credentials.js'
+import {
+  FLOWTEXT_DIRECT_MODEL,
+  FLOWTEXT_DIRECT_PROVIDER,
+  FlowTextDirectAdapter,
+} from './direct-adapter.js'
 import type { FlowTextRunPolicy } from './protocol.js'
 import { startFlowTextRun, type FlowTextApprovalDecision, type FlowTextRunSpec } from './run.js'
 
 export const name = 'subagent-flowtext'
-export const inject = ['subagents']
+export const inject = ['subagents', 'llm']
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:27124/flowtext-agent/v1'
 
@@ -21,6 +26,12 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:27124/flowtext-agent/v1'
 export interface Config {
   /** Provider name registered on `ctx.subagents`. */
   providerName?: string
+  /** Force every DSH agent request through FlowText instead of exposing it as an optional tool. */
+  directMode?: boolean
+  /** DSH LLM provider route used by direct mode. */
+  directProvider?: string
+  /** DSH display model used by direct mode. */
+  directModel?: string
   /** FlowText Gateway v1 base URL. Only loopback HTTP URLs are accepted. */
   baseUrl?: string
   /** Optional legacy FlowText Bearer token. Omit to use secure local pairing. */
@@ -74,6 +85,9 @@ const PolicySchema = z.object({
 
 export const Config: z<Config> = z.object({
   providerName: z.string().min(1).default('flowtext'),
+  directMode: z.boolean().default(true),
+  directProvider: z.string().min(1).default(FLOWTEXT_DIRECT_PROVIDER),
+  directModel: z.string().min(1).default(FLOWTEXT_DIRECT_MODEL),
   baseUrl: z.string().default(DEFAULT_BASE_URL),
   token: z.string().min(24),
   autoPair: z.boolean().default(true),
@@ -104,6 +118,16 @@ function assertPositiveInteger(name: string, value: number, maximum: number): vo
   if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
     throw new Error(`subagent-flowtext: ${name} must be a positive safe integer no greater than ${maximum}`)
   }
+}
+
+interface AgentRequestContext {
+  on(
+    event: 'agent/request',
+    listener: (
+      payload: { signal: AbortSignal },
+      next: () => Promise<import('@deepseek-ai/dsh-llm').LlmCallConfig>,
+    ) => Promise<import('@deepseek-ai/dsh-llm').LlmCallConfig>,
+  ): () => void
 }
 
 class FlowTextProvider implements SubagentProvider {
@@ -148,6 +172,9 @@ class FlowTextProvider implements SubagentProvider {
 export function apply(ctx: Context, config: Config): void {
   const resolved: ResolvedConfig = {
     providerName: config.providerName ?? 'flowtext',
+    directMode: config.directMode ?? true,
+    directProvider: config.directProvider ?? FLOWTEXT_DIRECT_PROVIDER,
+    directModel: config.directModel ?? FLOWTEXT_DIRECT_MODEL,
     baseUrl: config.baseUrl ?? DEFAULT_BASE_URL,
     token: config.token,
     autoPair: config.autoPair ?? true,
@@ -182,9 +209,40 @@ export function apply(ctx: Context, config: Config): void {
     longPollMs: resolved.longPollMs,
     maxResponseBytes: resolved.maxResponseBytes,
   })
-  ctx.subagents.registerProvider(new FlowTextProvider(resolved.providerName, ctx, resolved, client))
+  const provider = new FlowTextProvider(resolved.providerName, ctx, resolved, client)
+  ctx.subagents.registerProvider(provider)
+  const directSpec: FlowTextRunSpec = {
+    client,
+    clientId: resolved.clientId,
+    ...(resolved.modelId === undefined ? {} : { modelId: resolved.modelId }),
+    ...(resolved.activePath === undefined ? {} : { activePath: resolved.activePath }),
+    contextPaths: resolved.contextPaths,
+    policy: resolved.policy,
+    runOptions: resolved.runOptions,
+    approvalDecision: resolved.approvalDecision,
+    maxPromptBytes: resolved.maxPromptBytes,
+    maxAnswerBytes: resolved.maxAnswerBytes,
+    onError: error => ctx.logger.warn(`flowtext-direct: ${error.message}`),
+  }
+  ctx.llm.registerAdapter(
+    [resolved.directProvider],
+    new FlowTextDirectAdapter(resolved.directProvider, resolved.directModel, directSpec),
+  )
+  if (resolved.directMode) {
+    const requestContext = ctx as unknown as AgentRequestContext
+    requestContext.on('agent/request', async (_payload, next) => {
+      const current = await next()
+      const { reasoningEffort: _reasoningEffort, ...withoutReasoningEffort } = current
+      return {
+        ...withoutReasoningEffort,
+        provider: resolved.directProvider,
+        model: resolved.directModel,
+      }
+    })
+  }
 }
 
 export type { FlowTextApprovalDecision, FlowTextRunSpec } from './run.js'
 export type { FlowTextRunPolicy } from './protocol.js'
 export type { FlowTextCredentialStore } from './credentials.js'
+export { FLOWTEXT_DIRECT_MODEL, FLOWTEXT_DIRECT_PROVIDER, FlowTextDirectAdapter } from './direct-adapter.js'

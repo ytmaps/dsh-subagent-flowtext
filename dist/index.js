@@ -2,9 +2,10 @@
 import z from '@deepseek-ai/schemastery';
 import { FlowTextClient } from './client.js';
 import { FileCredentialStore } from './credentials.js';
+import { FLOWTEXT_DIRECT_MODEL, FLOWTEXT_DIRECT_PROVIDER, FlowTextDirectAdapter, } from './direct-adapter.js';
 import { startFlowTextRun } from './run.js';
 export const name = 'subagent-flowtext';
-export const inject = ['subagents'];
+export const inject = ['subagents', 'llm'];
 const DEFAULT_BASE_URL = 'http://127.0.0.1:27124/flowtext-agent/v1';
 const PolicySchema = z.object({
     allowRead: z.boolean(),
@@ -22,6 +23,9 @@ const PolicySchema = z.object({
 });
 export const Config = z.object({
     providerName: z.string().min(1).default('flowtext'),
+    directMode: z.boolean().default(true),
+    directProvider: z.string().min(1).default(FLOWTEXT_DIRECT_PROVIDER),
+    directModel: z.string().min(1).default(FLOWTEXT_DIRECT_MODEL),
     baseUrl: z.string().default(DEFAULT_BASE_URL),
     token: z.string().min(24),
     autoPair: z.boolean().default(true),
@@ -88,6 +92,9 @@ class FlowTextProvider {
 export function apply(ctx, config) {
     const resolved = {
         providerName: config.providerName ?? 'flowtext',
+        directMode: config.directMode ?? true,
+        directProvider: config.directProvider ?? FLOWTEXT_DIRECT_PROVIDER,
+        directModel: config.directModel ?? FLOWTEXT_DIRECT_MODEL,
         baseUrl: config.baseUrl ?? DEFAULT_BASE_URL,
         token: config.token,
         autoPair: config.autoPair ?? true,
@@ -122,6 +129,34 @@ export function apply(ctx, config) {
         longPollMs: resolved.longPollMs,
         maxResponseBytes: resolved.maxResponseBytes,
     });
-    ctx.subagents.registerProvider(new FlowTextProvider(resolved.providerName, ctx, resolved, client));
+    const provider = new FlowTextProvider(resolved.providerName, ctx, resolved, client);
+    ctx.subagents.registerProvider(provider);
+    const directSpec = {
+        client,
+        clientId: resolved.clientId,
+        ...(resolved.modelId === undefined ? {} : { modelId: resolved.modelId }),
+        ...(resolved.activePath === undefined ? {} : { activePath: resolved.activePath }),
+        contextPaths: resolved.contextPaths,
+        policy: resolved.policy,
+        runOptions: resolved.runOptions,
+        approvalDecision: resolved.approvalDecision,
+        maxPromptBytes: resolved.maxPromptBytes,
+        maxAnswerBytes: resolved.maxAnswerBytes,
+        onError: error => ctx.logger.warn(`flowtext-direct: ${error.message}`),
+    };
+    ctx.llm.registerAdapter([resolved.directProvider], new FlowTextDirectAdapter(resolved.directProvider, resolved.directModel, directSpec));
+    if (resolved.directMode) {
+        const requestContext = ctx;
+        requestContext.on('agent/request', async (_payload, next) => {
+            const current = await next();
+            const { reasoningEffort: _reasoningEffort, ...withoutReasoningEffort } = current;
+            return {
+                ...withoutReasoningEffort,
+                provider: resolved.directProvider,
+                model: resolved.directModel,
+            };
+        });
+    }
 }
+export { FLOWTEXT_DIRECT_MODEL, FLOWTEXT_DIRECT_PROVIDER, FlowTextDirectAdapter } from './direct-adapter.js';
 //# sourceMappingURL=index.js.map

@@ -9,6 +9,12 @@ export declare const inject: string[];
 export interface Config {
     /** Provider name registered on `ctx.subagents`. */
     providerName?: string;
+    /** Force every DSH agent request through FlowText instead of exposing it as an optional tool. */
+    directMode?: boolean;
+    /** DSH LLM provider route used by direct mode. */
+    directProvider?: string;
+    /** DSH display model used by direct mode. */
+    directModel?: string;
     /** FlowText Gateway v1 base URL. Only loopback HTTP URLs are accepted. */
     baseUrl?: string;
     /** Optional legacy FlowText Bearer token. Omit to use secure local pairing. */
@@ -54,3 +60,4 @@ export declare function apply(ctx: Context, config: Config): void;
 export type { FlowTextApprovalDecision, FlowTextRunSpec } from './run.js';
 export type { FlowTextRunPolicy } from './protocol.js';
 export type { FlowTextCredentialStore } from './credentials.js';
+export { FLOWTEXT_DIRECT_MODEL, FLOWTEXT_DIRECT_PROVIDER, FlowTextDirectAdapter } from './direct-adapter.js';

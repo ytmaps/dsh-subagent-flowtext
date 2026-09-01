@@ -6,7 +6,12 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { FlowTextClient, FlowTextClientError } from '../dist/client.js'
 import { FileCredentialStore } from '../dist/credentials.js'
-import { apply } from '../dist/index.js'
+import {
+  FLOWTEXT_DIRECT_MODEL,
+  FLOWTEXT_DIRECT_PROVIDER,
+  FlowTextDirectAdapter,
+  apply,
+} from '../dist/index.js'
 import { startFlowTextRun } from '../dist/run.js'
 
 const TOKEN = 'test-token-'.padEnd(64, 'x')
@@ -84,8 +89,12 @@ test('client rejects a non-loopback endpoint before sending the token', () => {
 
 test('Cordis plugin registers a remote provider with no unsupported capabilities', () => {
   let provider
+  let adapter
+  let requestListener
   apply({
     subagents: { registerProvider(value) { provider = value; return () => undefined } },
+    llm: { registerAdapter(routes, value) { assert.deepEqual(routes, [FLOWTEXT_DIRECT_PROVIDER]); adapter = value; return () => undefined } },
+    on(event, listener) { assert.equal(event, 'agent/request'); requestListener = listener; return () => undefined },
     logger: { warn() {} },
   }, {})
   assert.equal(provider.name, 'flowtext')
@@ -97,6 +106,42 @@ test('Cordis plugin registers a remote provider with no unsupported capabilities
     persona: false,
   })
   assert.equal(provider.prepareContinuable, undefined)
+  assert.ok(adapter instanceof FlowTextDirectAdapter)
+  assert.equal(typeof requestListener, 'function')
+})
+
+test('direct mode forces the FlowText route and removes inherited reasoning effort', async () => {
+  let requestListener
+  apply({
+    subagents: { registerProvider() { return () => undefined } },
+    llm: { registerAdapter() { return () => undefined } },
+    on(_event, listener) { requestListener = listener; return () => undefined },
+    logger: { warn() {} },
+  }, {})
+  const routed = await requestListener({}, async () => ({
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+    reasoningEffort: 'high',
+    temperature: 0.2,
+  }))
+  assert.deepEqual(routed, {
+    provider: FLOWTEXT_DIRECT_PROVIDER,
+    model: FLOWTEXT_DIRECT_MODEL,
+    temperature: 0.2,
+  })
+})
+
+test('tool mode keeps the direct adapter selectable without forcing the DSH route', () => {
+  let adapterRegistered = false
+  let requestListenerRegistered = false
+  apply({
+    subagents: { registerProvider() { return () => undefined } },
+    llm: { registerAdapter() { adapterRegistered = true; return () => undefined } },
+    on() { requestListenerRegistered = true; return () => undefined },
+    logger: { warn() {} },
+  }, { directMode: false })
+  assert.equal(adapterRegistered, true)
+  assert.equal(requestListenerRegistered, false)
 })
 
 test('client pairs once, persists the credential, and reuses it for requests', async () => {
@@ -193,6 +238,62 @@ test('provider returns the terminal FlowText answer and sends an idempotency key
   assert.match(createdBody.requestId, /^[0-9a-f-]{36}$/)
   assert.equal(createdBody.goal, 'Summarize A.md')
   await run.dispose()
+})
+
+test('direct adapter sends only the latest real user task and returns the FlowText answer', async () => {
+  let createdBody
+  const baseUrl = await gateway(async (req, res) => {
+    if (req.method === 'POST' && req.url === '/flowtext-agent/v1/tasks') {
+      const chunks = []
+      for await (const chunk of req) chunks.push(chunk)
+      createdBody = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      json(res, 202, { task: { taskId: 'flow-direct', clientId: 'test-harness', status: 'running', lastSeq: 1 } })
+      return
+    }
+    if (req.url.startsWith('/flowtext-agent/v1/tasks/flow-direct/events')) {
+      json(res, 200, { taskId: 'flow-direct', events: [], lastSeq: 2 })
+      return
+    }
+    if (req.url === '/flowtext-agent/v1/tasks/flow-direct') {
+      json(res, 200, { task: { taskId: 'flow-direct', clientId: 'test-harness', status: 'completed', lastSeq: 2, result: { success: true, answer: 'FlowText finished everything' } } })
+      return
+    }
+    throw new Error(`unexpected route ${req.method} ${req.url}`)
+  })
+  const adapter = new FlowTextDirectAdapter(
+    FLOWTEXT_DIRECT_PROVIDER,
+    FLOWTEXT_DIRECT_MODEL,
+    runSpec(client(baseUrl)),
+  )
+  assert.deepEqual(adapter.providerRetryPolicy(FLOWTEXT_DIRECT_PROVIDER), {
+    mode: 'normal',
+    maxRetries: 0,
+    retryableCodes: [],
+    initialDelayMs: 500,
+    maxDelayMs: 10_000,
+    jitterRatio: 0,
+  })
+  const chunks = []
+  for await (const chunk of adapter.stream({
+    provider: FLOWTEXT_DIRECT_PROVIDER,
+    model: FLOWTEXT_DIRECT_MODEL,
+    system: 'DSH system prompt that must not be forwarded',
+    tools: [{ name: 'read_file', description: 'must not run in DSH', parameters: {} }],
+    messages: [
+      { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'old task' }] },
+      { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'deepseek', model: 'chat' }, content: [{ type: 'text', text: 'old answer' }] },
+      { id: 'p1', role: 'user', source: { kind: 'plugin', plugin: 'context' }, content: [{ type: 'text', text: 'plugin context' }] },
+      { id: 'u2', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'do the complete new task' }] },
+    ],
+  })) chunks.push(chunk)
+  assert.equal(createdBody.goal, 'do the complete new task')
+  assert.deepEqual(chunks, [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    { type: 'text-delta', index: 0, text: 'FlowText finished everything' },
+    { type: 'block-end', index: 0, block: { type: 'text', text: 'FlowText finished everything' } },
+    { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ])
 })
 
 test('provider resolves a FlowText approval with the configured fail-closed decision', async () => {
