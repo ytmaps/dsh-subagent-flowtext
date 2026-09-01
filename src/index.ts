@@ -10,6 +10,7 @@ import {
   FlowTextDirectAdapter,
 } from './direct-adapter.js'
 import type { FlowTextRunPolicy } from './protocol.js'
+import type { FlowTextProgressMode } from './progress.js'
 import type { FlowTextRunSpec } from './run.js'
 
 export const name = 'flowtext-direct'
@@ -34,6 +35,7 @@ export interface Config {
   maxResponseBytes?: number
   maxPromptBytes?: number
   maxAnswerBytes?: number
+  progressMode?: FlowTextProgressMode
 }
 
 const PolicySchema = z.object({
@@ -68,6 +70,7 @@ export const Config: z<Config> = z.object({
   maxResponseBytes: z.number().default(2 * 1024 * 1024),
   maxPromptBytes: z.number().default(1024 * 1024),
   maxAnswerBytes: z.number().default(1024 * 1024),
+  progressMode: z.union(['off', 'summary'] as const).default('summary'),
 })
 
 type ResolvedConfig = Required<Omit<Config, 'token' | 'credentialPath' | 'modelId' | 'activePath'>> & {
@@ -112,6 +115,7 @@ export function apply(ctx: Context, config: Config): void {
     maxResponseBytes: config.maxResponseBytes ?? 2 * 1024 * 1024,
     maxPromptBytes: config.maxPromptBytes ?? 1024 * 1024,
     maxAnswerBytes: config.maxAnswerBytes ?? 1024 * 1024,
+    progressMode: config.progressMode ?? 'summary',
   }
   assertPositiveInteger('requestTimeoutMs', resolved.requestTimeoutMs, 10 * 60 * 1000)
   assertPositiveInteger('longPollMs', resolved.longPollMs, 30_000)
@@ -140,6 +144,7 @@ export function apply(ctx: Context, config: Config): void {
     runOptions: resolved.runOptions,
     maxPromptBytes: resolved.maxPromptBytes,
     maxAnswerBytes: resolved.maxAnswerBytes,
+    progressMode: resolved.progressMode,
     onError: error => ctx.logger.warn(`flowtext-direct: ${error.message}`),
   }
   ctx.llm.registerAdapter(
@@ -160,6 +165,7 @@ export function apply(ctx: Context, config: Config): void {
 }
 
 export type { FlowTextRunSpec } from './run.js'
+export type { FlowTextProgressMode } from './progress.js'
 export type { FlowTextRunPolicy } from './protocol.js'
 export type { FlowTextCredentialStore } from './credentials.js'
 export { FLOWTEXT_DIRECT_MODEL, FLOWTEXT_DIRECT_PROVIDER, FlowTextDirectAdapter } from './direct-adapter.js'

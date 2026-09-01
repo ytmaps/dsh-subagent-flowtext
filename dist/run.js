@@ -1,6 +1,40 @@
 import { randomUUID } from 'node:crypto';
 import { FlowTextClient, FlowTextClientError } from './client.js';
+import { summarizeFlowTextEvent, summarizeTerminalTask, } from './progress.js';
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out', 'interrupted']);
+class ProgressQueue {
+    values = [];
+    seen = new Set();
+    waiters = [];
+    closed = false;
+    push(value) {
+        const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+        if (!normalized || this.closed || this.seen.has(normalized))
+            return;
+        this.seen.add(normalized);
+        this.values.push(`${normalized}\n`);
+        this.waiters.shift()?.();
+    }
+    close() {
+        if (this.closed)
+            return;
+        this.closed = true;
+        for (const wake of this.waiters.splice(0))
+            wake();
+    }
+    async *[Symbol.asyncIterator]() {
+        while (true) {
+            const value = this.values.shift();
+            if (value !== undefined) {
+                yield value;
+                continue;
+            }
+            if (this.closed)
+                return;
+            await new Promise(resolve => this.waiters.push(resolve));
+        }
+    }
+}
 function utf8Bytes(value) {
     return new TextEncoder().encode(value).byteLength;
 }
@@ -60,9 +94,12 @@ function taskResult(task, maxAnswerBytes) {
     const detail = task.error ? `${task.error.code}: ${task.error.message}` : `FlowText task ended with status ${task.status}`;
     return failedResult(reason === 'completed' ? 'error' : reason, safeDiagnostic(detail), output);
 }
-async function waitForTerminal(task, spec, signal) {
+async function waitForTerminal(task, spec, signal, progress) {
     let snapshot = task;
-    let after = task.lastSeq;
+    // Task startup can emit several UI updates before POST /tasks returns. In
+    // summary mode replay the bounded task event buffer from seq 0 so those
+    // early phases are visible instead of silently becoming a black box.
+    let after = spec.progressMode === 'summary' ? 0 : task.lastSeq;
     while (!TERMINAL_STATUSES.has(snapshot.status)) {
         if (snapshot.status === 'waiting_approval') {
             const approval = snapshot.pendingApproval;
@@ -70,6 +107,10 @@ async function waitForTerminal(task, spec, signal) {
                 throw new Error('FLOWTEXT_INVALID_APPROVAL: task is waiting without approval details');
         }
         const events = await spec.client.waitForEvents(snapshot.taskId, after, signal);
+        if (spec.progressMode === 'summary') {
+            for (const event of events.events)
+                progress.push(summarizeFlowTextEvent(event));
+        }
         after = Math.max(after, events.lastSeq);
         snapshot = await spec.client.getTask(snapshot.taskId, signal);
     }
@@ -103,6 +144,9 @@ export async function startFlowTextRun(request, spec, context = {}) {
         policy: spec.policy,
         runOptions: { ...spec.runOptions, fullAgentExecution: true },
     }, request.signal);
+    const progress = new ProgressQueue();
+    if (spec.progressMode === 'summary')
+        progress.push('FlowText Agent 已接管任务');
     const controller = new AbortController();
     let cancelPromise;
     const cancel = () => {
@@ -117,8 +161,12 @@ export async function startFlowTextRun(request, spec, context = {}) {
     if (request.signal.aborted)
         void cancel();
     let settled = false;
-    const result = waitForTerminal(initial, spec, controller.signal)
-        .then(task => taskResult(task, spec.maxAnswerBytes))
+    const result = waitForTerminal(initial, spec, controller.signal, progress)
+        .then(task => {
+        if (spec.progressMode === 'summary')
+            progress.push(summarizeTerminalTask(task));
+        return taskResult(task, spec.maxAnswerBytes);
+    })
         .catch(async (error) => {
         if (controller.signal.aborted || request.signal.aborted) {
             await cancel();
@@ -132,10 +180,12 @@ export async function startFlowTextRun(request, spec, context = {}) {
         .finally(() => {
         settled = true;
         request.signal.removeEventListener('abort', onRequestAbort);
+        progress.close();
     });
     let disposePromise;
     return {
         id: initial.taskId,
+        progress,
         result,
         dispose() {
             disposePromise ??= (async () => {

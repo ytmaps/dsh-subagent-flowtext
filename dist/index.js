@@ -37,6 +37,7 @@ export const Config = z.object({
     maxResponseBytes: z.number().default(2 * 1024 * 1024),
     maxPromptBytes: z.number().default(1024 * 1024),
     maxAnswerBytes: z.number().default(1024 * 1024),
+    progressMode: z.union(['off', 'summary']).default('summary'),
 });
 function assertPositiveInteger(name, value, maximum) {
     if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
@@ -62,6 +63,7 @@ export function apply(ctx, config) {
         maxResponseBytes: config.maxResponseBytes ?? 2 * 1024 * 1024,
         maxPromptBytes: config.maxPromptBytes ?? 1024 * 1024,
         maxAnswerBytes: config.maxAnswerBytes ?? 1024 * 1024,
+        progressMode: config.progressMode ?? 'summary',
     };
     assertPositiveInteger('requestTimeoutMs', resolved.requestTimeoutMs, 10 * 60 * 1000);
     assertPositiveInteger('longPollMs', resolved.longPollMs, 30_000);
@@ -89,6 +91,7 @@ export function apply(ctx, config) {
         runOptions: resolved.runOptions,
         maxPromptBytes: resolved.maxPromptBytes,
         maxAnswerBytes: resolved.maxAnswerBytes,
+        progressMode: resolved.progressMode,
         onError: error => ctx.logger.warn(`flowtext-direct: ${error.message}`),
     };
     ctx.llm.registerAdapter([FLOWTEXT_DIRECT_PROVIDER], new FlowTextDirectAdapter(FLOWTEXT_DIRECT_PROVIDER, FLOWTEXT_DIRECT_MODEL, spec));

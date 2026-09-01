@@ -2,7 +2,7 @@
 
 [中文](README.zh.md)
 
-`dsh-subagent-flowtext` registers one DeepSeek Harness route: `flowtext-direct / flowtext-agent`. DSH receives the user instruction and records the terminal answer. FlowText owns classification, planning, discovery, reads, writes, tools, clarification, approval, and finalization, with the complete trajectory rendered in the matching FlowText Agent panel.
+`dsh-subagent-flowtext` registers one DeepSeek Harness route: `flowtext-direct / flowtext-agent`. DSH receives the user instruction, renders a sanitized compact execution trace, and records the terminal answer. FlowText exclusively owns classification, planning, discovery, reads, writes, tools, clarification, approval, and finalization.
 
 The plugin does not register a `SubagentProvider`, expose `subagent_flowtext`, or install `tool-subagent-flowtext`.
 
@@ -32,6 +32,8 @@ If upgrading from `0.4.x` or earlier, remove the old package before adding it ag
 ## Runtime behavior
 
 - Every DSH Agent request is forced through `flowtext-direct / flowtext-agent`.
+- By default, safe phase, plan, and tool summaries stream into DSH as reasoning content; they never become DSH tool calls.
+- Set `progressMode: off` to retain final-answer-only behavior.
 - Only the latest real user message and DSH `sessionId` are sent.
 - DSH system prompts, tool catalogs, assistant history, and plugin context are not forwarded.
 - The same DSH `sessionId` reuses one persistent FlowText conversation and Agent panel.

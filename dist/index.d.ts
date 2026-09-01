@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
 import type { FlowTextRunPolicy } from './protocol.js';
+import type { FlowTextProgressMode } from './progress.js';
 export declare const name = "flowtext-direct";
 export declare const inject: string[];
 export interface Config {
@@ -21,11 +22,13 @@ export interface Config {
     maxResponseBytes?: number;
     maxPromptBytes?: number;
     maxAnswerBytes?: number;
+    progressMode?: FlowTextProgressMode;
 }
 export declare const Config: z<Config>;
 /** Register the only execution route: FlowText Agent direct mode. */
 export declare function apply(ctx: Context, config: Config): void;
 export type { FlowTextRunSpec } from './run.js';
+export type { FlowTextProgressMode } from './progress.js';
 export type { FlowTextRunPolicy } from './protocol.js';
 export type { FlowTextCredentialStore } from './credentials.js';
 export { FLOWTEXT_DIRECT_MODEL, FLOWTEXT_DIRECT_PROVIDER, FlowTextDirectAdapter } from './direct-adapter.js';

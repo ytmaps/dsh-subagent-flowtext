@@ -80,6 +80,16 @@ export class FlowTextDirectAdapter extends LlmAdapter {
             ...(options.sessionId === undefined ? {} : { conversationId: String(options.sessionId) }),
         });
         try {
+            let progressText = '';
+            for await (const update of run.progress) {
+                if (!progressText)
+                    yield { type: 'block-start', index: 0, blockType: 'reasoning' };
+                progressText += update;
+                yield { type: 'reasoning-delta', index: 0, text: update };
+            }
+            if (progressText) {
+                yield { type: 'block-end', index: 0, block: { type: 'reasoning', text: progressText } };
+            }
             const result = await run.result;
             if (result.stopReason !== 'completed') {
                 yield {
@@ -95,9 +105,10 @@ export class FlowTextDirectAdapter extends LlmAdapter {
                 .map(block => block.text)
                 .join('\n\n');
             if (answer) {
-                yield { type: 'block-start', index: 0, blockType: 'text' };
-                yield { type: 'text-delta', index: 0, text: answer };
-                yield { type: 'block-end', index: 0, block: { type: 'text', text: answer } };
+                const index = progressText ? 1 : 0;
+                yield { type: 'block-start', index, blockType: 'text' };
+                yield { type: 'text-delta', index, text: answer };
+                yield { type: 'block-end', index, block: { type: 'text', text: answer } };
             }
             yield { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } };
             yield { type: 'finish', reason: { kind: 'stop' } };

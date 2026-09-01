@@ -69,6 +69,7 @@ function runSpec(flowtextClient, overrides = {}) {
     runOptions: {},
     maxPromptBytes: 4096,
     maxAnswerBytes: 4096,
+    progressMode: 'summary',
     ...overrides,
   }
 }
@@ -224,11 +225,18 @@ test('direct adapter sends only the latest real user task and returns the FlowTe
       return
     }
     if (req.url.startsWith('/flowtext-agent/v1/tasks/flow-direct/events')) {
-      json(res, 200, { taskId: 'flow-direct', events: [], lastSeq: 2 })
+      json(res, 200, {
+        taskId: 'flow-direct',
+        events: [
+          { taskId: 'flow-direct', seq: 2, type: 'agent.update', timestamp: 1, data: { type: 'plan_summary', content: 'Read and update the note' } },
+          { taskId: 'flow-direct', seq: 3, type: 'agent.update', timestamp: 2, data: { type: 'action', action: { type: 'edit', path: 'Notes/A.md', replacement: 'must stay private' } } },
+        ],
+        lastSeq: 3,
+      })
       return
     }
     if (req.url === '/flowtext-agent/v1/tasks/flow-direct') {
-      json(res, 200, { task: { taskId: 'flow-direct', clientId: 'test-harness', status: 'completed', lastSeq: 2, result: { success: true, answer: 'FlowText finished everything' } } })
+      json(res, 200, { task: { taskId: 'flow-direct', clientId: 'test-harness', status: 'completed', lastSeq: 4, result: { success: true, answer: 'FlowText finished everything' } } })
       return
     }
     throw new Error(`unexpected route ${req.method} ${req.url}`)
@@ -265,12 +273,20 @@ test('direct adapter sends only the latest real user task and returns the FlowTe
   assert.equal(createdBody.presentation, 'agent_view')
   assert.equal(createdBody.runOptions.fullAgentExecution, true)
   assert.deepEqual(chunks, [
-    { type: 'block-start', index: 0, blockType: 'text' },
-    { type: 'text-delta', index: 0, text: 'FlowText finished everything' },
-    { type: 'block-end', index: 0, block: { type: 'text', text: 'FlowText finished everything' } },
+    { type: 'block-start', index: 0, blockType: 'reasoning' },
+    { type: 'reasoning-delta', index: 0, text: 'FlowText Agent 已接管任务\n' },
+    { type: 'reasoning-delta', index: 0, text: '计划：Read and update the note\n' },
+    { type: 'reasoning-delta', index: 0, text: '编辑：Notes/A.md\n' },
+    { type: 'reasoning-delta', index: 0, text: 'FlowText Agent 执行完成\n' },
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'FlowText Agent 已接管任务\n计划：Read and update the note\n编辑：Notes/A.md\nFlowText Agent 执行完成\n' } },
+    { type: 'block-start', index: 1, blockType: 'text' },
+    { type: 'text-delta', index: 1, text: 'FlowText finished everything' },
+    { type: 'block-end', index: 1, block: { type: 'text', text: 'FlowText finished everything' } },
     { type: 'usage', usage: { inputTokens: 0, outputTokens: 0 } },
     { type: 'finish', reason: { kind: 'stop' } },
   ])
+  assert.equal(chunks.some(chunk => chunk.type === 'tool-call-delta'), false)
+  assert.equal(JSON.stringify(chunks).includes('must stay private'), false)
 })
 
 test('direct run waits for FlowText UI clarification instead of cancelling it', async () => {

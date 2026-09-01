@@ -1,6 +1,7 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import { FlowTextClient } from './client.js';
 import type { FlowTextRunPolicy } from './protocol.js';
+import { type FlowTextProgressMode } from './progress.js';
 export type FlowTextStopReason = 'completed' | 'aborted' | 'error';
 export interface FlowTextRunRequest {
     readonly prompt: readonly ContentBlock[];
@@ -13,6 +14,7 @@ export interface FlowTextRunResult {
 }
 export interface FlowTextRun {
     readonly id: string;
+    readonly progress: AsyncIterable<string>;
     readonly result: Promise<FlowTextRunResult>;
     dispose(): Promise<void>;
 }
@@ -27,6 +29,7 @@ export interface FlowTextRunSpec {
     readonly runOptions: Readonly<Record<string, unknown>>;
     readonly maxPromptBytes: number;
     readonly maxAnswerBytes: number;
+    readonly progressMode: FlowTextProgressMode;
     readonly onError?: (error: Error) => void;
 }
 /**

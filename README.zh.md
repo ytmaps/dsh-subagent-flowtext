@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-`dsh-subagent-flowtext` 为 DeepSeek Harness 注册唯一的 `flowtext-direct / flowtext-agent` 路由。DSH 只接收用户指令和记录最终答案；分类、规划、查找、读取、写入、工具执行、追问、审批及收尾全部由 Obsidian FlowText Agent 完成，并显示在对应的 FlowText Agent 面板中。
+`dsh-subagent-flowtext` 为 DeepSeek Harness 注册唯一的 `flowtext-direct / flowtext-agent` 路由。DSH 只接收用户指令，显示脱敏的精简执行轨迹并记录最终答案；分类、规划、查找、读取、写入、工具执行、追问、审批及收尾全部由 Obsidian FlowText Agent 完成。
 
 本插件不注册 `SubagentProvider`，不提供 `subagent_flowtext`，也不安装 `tool-subagent-flowtext`。
 
@@ -34,9 +34,9 @@ dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
 - 插件固定把 DSH Agent 请求路由到 `flowtext-direct / flowtext-agent`。
 - 只发送最新一条真实用户消息和 DSH `sessionId`。
 - 不向 FlowText 发送 DSH 系统提示、工具目录、助手历史或插件上下文。
-- 相同 DSH `sessionId` 复用同一个 FlowText 会话和 Agent 面板。
-- 不同 DSH 会话拥有独立的 FlowText Agent 面板。
-- FlowText UI 显示完整执行过程；DSH 只收到最终结果。
+- 相同 DSH `sessionId` 复用同一个 FlowText 会话；不同 DSH 会话仍独立保存，但会优先复用已打开的空闲 Agent 面板。
+- FlowText UI 显示完整执行过程；DSH 通过可折叠的 reasoning 区域实时显示脱敏执行摘要。
+- 轨迹不会生成 DSH 工具调用，DSH 不会重复执行 FlowText 工具。
 - FlowText UI 中的追问和危险操作审批会暂停 DSH，直到用户完成交互。
 - 适配器禁用 DSH 模型重试，避免包含写操作的任务被重复执行。
 
@@ -59,6 +59,7 @@ dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
 | `maxResponseBytes` | `2097152` | Gateway 响应上限。 |
 | `maxPromptBytes` | `1048576` | 用户指令上限。 |
 | `maxAnswerBytes` | `1048576` | 最终答案上限。 |
+| `progressMode` | `summary` | `summary` 实时显示脱敏执行轨迹；`off` 仅显示最终答案。 |
 
 ## 安全边界
 
