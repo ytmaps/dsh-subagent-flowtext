@@ -1,17 +1,26 @@
 import { randomUUID } from 'node:crypto'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { SessionId } from '@deepseek-ai/dsh-session'
-import type {
-  ResolvedSubagentStartRequest,
-  SubagentResult,
-  SubagentRun,
-  SubagentStopReason,
-} from '@deepseek-ai/dsh-subagent'
 import { FlowTextClient, FlowTextClientError } from './client.js'
 import type { FlowTextRunPolicy, FlowTextTaskSnapshot } from './protocol.js'
 
-/** How unattended FlowText approval requests are resolved. */
-export type FlowTextApprovalDecision = 'deny' | 'once' | 'session'
+export type FlowTextStopReason = 'completed' | 'aborted' | 'error'
+
+export interface FlowTextRunRequest {
+  readonly prompt: readonly ContentBlock[]
+  readonly signal: AbortSignal
+}
+
+export interface FlowTextRunResult {
+  readonly output: ContentBlock[]
+  readonly stopReason: FlowTextStopReason
+  readonly diagnostic?: string
+}
+
+export interface FlowTextRun {
+  readonly id: string
+  readonly result: Promise<FlowTextRunResult>
+  dispose(): Promise<void>
+}
 
 /** Fully resolved inputs for one remote FlowText run. */
 export interface FlowTextRunSpec {
@@ -22,7 +31,6 @@ export interface FlowTextRunSpec {
   readonly contextPaths: readonly string[]
   readonly policy: FlowTextRunPolicy
   readonly runOptions: Readonly<Record<string, unknown>>
-  readonly approvalDecision: FlowTextApprovalDecision
   readonly maxPromptBytes: number
   readonly maxAnswerBytes: number
   readonly onError?: (error: Error) => void
@@ -63,7 +71,7 @@ function reportError(spec: FlowTextRunSpec, error: Error): void {
   }
 }
 
-function taskStopReason(task: FlowTextTaskSnapshot): SubagentStopReason {
+function taskStopReason(task: FlowTextTaskSnapshot): FlowTextStopReason {
   switch (task.status) {
     case 'completed': return 'completed'
     case 'cancelled': return 'aborted'
@@ -74,14 +82,11 @@ function taskStopReason(task: FlowTextTaskSnapshot): SubagentStopReason {
   }
 }
 
-type ResultWithDiagnostic = SubagentResult & { readonly diagnostic?: string }
-
-function failedResult(stopReason: SubagentStopReason, diagnostic: string, output: ContentBlock[] = []): SubagentResult {
-  const result: ResultWithDiagnostic = { output, stopReason, diagnostic }
-  return result
+function failedResult(stopReason: FlowTextStopReason, diagnostic: string, output: ContentBlock[] = []): FlowTextRunResult {
+  return { output, stopReason, diagnostic }
 }
 
-function taskResult(task: FlowTextTaskSnapshot, maxAnswerBytes: number): SubagentResult {
+function taskResult(task: FlowTextTaskSnapshot, maxAnswerBytes: number): FlowTextRunResult {
   const reason = taskStopReason(task)
   const answer = String(task.result?.answer ?? '')
   if (utf8Bytes(answer) > maxAnswerBytes) {
@@ -101,13 +106,9 @@ async function waitForTerminal(
   let snapshot = task
   let after = task.lastSeq
   while (!TERMINAL_STATUSES.has(snapshot.status)) {
-    if (snapshot.status === 'waiting_input') {
-      throw new Error('FLOWTEXT_INPUT_REQUIRED: the remote task requires user input')
-    }
     if (snapshot.status === 'waiting_approval') {
       const approval = snapshot.pendingApproval
       if (approval === undefined) throw new Error('FLOWTEXT_INVALID_APPROVAL: task is waiting without approval details')
-      await spec.client.resolveApproval(snapshot.taskId, approval.requestId, spec.approvalDecision, signal)
     }
     const events = await spec.client.waitForEvents(snapshot.taskId, after, signal)
     after = Math.max(after, events.lastSeq)
@@ -118,21 +119,25 @@ async function waitForTerminal(
 
 /**
  * Publish one remote FlowText task and own it until terminal settlement.
- * @param request - resolved one-shot Harness delegation.
- * @param spec - client, authority, bounds, and unattended approval policy.
- * @returns a remote SubagentRun whose disposal cancels and awaits the task.
+ * @param request - the latest DSH user task.
+ * @param spec - client, authority, and response bounds.
+ * @returns an owned FlowText run whose disposal cancels and awaits the task.
  */
 export async function startFlowTextRun(
-  request: ResolvedSubagentStartRequest,
+  request: FlowTextRunRequest,
   spec: FlowTextRunSpec,
-): Promise<SubagentRun> {
+  context: { readonly conversationId?: string } = {},
+): Promise<FlowTextRun> {
   if (request.signal.aborted) throw new Error('subagent-flowtext: request was aborted before task creation')
   const goal = promptText(request.prompt)
   if (utf8Bytes(goal) > spec.maxPromptBytes) throw new Error('subagent-flowtext: prompt exceeds maxPromptBytes')
   const requestId = randomUUID()
+  const conversationId = String(context.conversationId || requestId)
   const initial = await spec.client.createTask({
     clientId: spec.clientId,
     requestId,
+    conversationId,
+    presentation: 'agent_view',
     goal,
     ...(spec.modelId === undefined ? {} : { modelId: spec.modelId }),
     context: {
@@ -140,7 +145,7 @@ export async function startFlowTextRun(
       ...(spec.contextPaths.length === 0 ? {} : { paths: spec.contextPaths }),
     },
     policy: spec.policy,
-    runOptions: spec.runOptions,
+    runOptions: { ...spec.runOptions, fullAgentExecution: true },
   }, request.signal)
 
   const controller = new AbortController()
@@ -159,7 +164,7 @@ export async function startFlowTextRun(
   let settled = false
   const result = waitForTerminal(initial, spec, controller.signal)
     .then(task => taskResult(task, spec.maxAnswerBytes))
-    .catch(async (error: unknown): Promise<SubagentResult> => {
+    .catch(async (error: unknown): Promise<FlowTextRunResult> => {
       if (controller.signal.aborted || request.signal.aborted) {
         await cancel()
         return failedResult('aborted', 'FlowText task was cancelled')
@@ -176,8 +181,7 @@ export async function startFlowTextRun(
 
   let disposePromise: Promise<void> | undefined
   return {
-    id: SessionId(initial.taskId),
-    localAgent: undefined,
+    id: initial.taskId,
     result,
     dispose() {
       disposePromise ??= (async () => {

@@ -67,7 +67,6 @@ function runSpec(flowtextClient, overrides = {}) {
     contextPaths: [],
     policy: { allowCli: false },
     runOptions: {},
-    approvalDecision: 'deny',
     maxPromptBytes: 4096,
     maxAnswerBytes: 4096,
     ...overrides,
@@ -87,33 +86,21 @@ test('client rejects a non-loopback endpoint before sending the token', () => {
   assert.throws(() => client('https://example.com/flowtext-agent/v1'), /loopback http URL/)
 })
 
-test('Cordis plugin registers a remote provider with no unsupported capabilities', () => {
-  let provider
+test('Cordis plugin registers only the fixed FlowText direct adapter', () => {
   let adapter
   let requestListener
   apply({
-    subagents: { registerProvider(value) { provider = value; return () => undefined } },
     llm: { registerAdapter(routes, value) { assert.deepEqual(routes, [FLOWTEXT_DIRECT_PROVIDER]); adapter = value; return () => undefined } },
     on(event, listener) { assert.equal(event, 'agent/request'); requestListener = listener; return () => undefined },
     logger: { warn() {} },
   }, {})
-  assert.equal(provider.name, 'flowtext')
-  assert.equal(provider.inheritsParentContext, false)
-  assert.deepEqual(provider.capabilities, {
-    outputSchema: false,
-    depthLimit: false,
-    toolFilter: false,
-    persona: false,
-  })
-  assert.equal(provider.prepareContinuable, undefined)
   assert.ok(adapter instanceof FlowTextDirectAdapter)
   assert.equal(typeof requestListener, 'function')
 })
 
-test('direct mode forces the FlowText route and removes inherited reasoning effort', async () => {
+test('plugin always forces the FlowText route and removes inherited reasoning effort', async () => {
   let requestListener
   apply({
-    subagents: { registerProvider() { return () => undefined } },
     llm: { registerAdapter() { return () => undefined } },
     on(_event, listener) { requestListener = listener; return () => undefined },
     logger: { warn() {} },
@@ -129,19 +116,6 @@ test('direct mode forces the FlowText route and removes inherited reasoning effo
     model: FLOWTEXT_DIRECT_MODEL,
     temperature: 0.2,
   })
-})
-
-test('tool mode keeps the direct adapter selectable without forcing the DSH route', () => {
-  let adapterRegistered = false
-  let requestListenerRegistered = false
-  apply({
-    subagents: { registerProvider() { return () => undefined } },
-    llm: { registerAdapter() { adapterRegistered = true; return () => undefined } },
-    on() { requestListenerRegistered = true; return () => undefined },
-    logger: { warn() {} },
-  }, { directMode: false })
-  assert.equal(adapterRegistered, true)
-  assert.equal(requestListenerRegistered, false)
 })
 
 test('client pairs once, persists the credential, and reuses it for requests', async () => {
@@ -209,7 +183,7 @@ test('file credential store persists only the matching endpoint with owner-only 
   }
 })
 
-test('provider returns the terminal FlowText answer and sends an idempotency key', async () => {
+test('direct run returns the terminal FlowText answer and sends an idempotency key', async () => {
   let createdBody
   const baseUrl = await gateway(async (req, res) => {
     if (req.method === 'POST' && req.url === '/flowtext-agent/v1/tasks') {
@@ -232,7 +206,6 @@ test('provider returns the terminal FlowText answer and sends an idempotency key
   const run = await startFlowTextRun(request(), runSpec(client(baseUrl)))
   const result = await run.result
   assert.equal(run.id, 'flow-1')
-  assert.equal(run.localAgent, undefined)
   assert.deepEqual(result, { output: [{ type: 'text', text: 'Summary complete' }], stopReason: 'completed' })
   assert.equal(createdBody.clientId, 'test-harness')
   assert.match(createdBody.requestId, /^[0-9a-f-]{36}$/)
@@ -279,6 +252,7 @@ test('direct adapter sends only the latest real user task and returns the FlowTe
     model: FLOWTEXT_DIRECT_MODEL,
     system: 'DSH system prompt that must not be forwarded',
     tools: [{ name: 'read_file', description: 'must not run in DSH', parameters: {} }],
+    sessionId: 'dsh-session-42',
     messages: [
       { id: 'u1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'old task' }] },
       { id: 'a1', role: 'assistant', source: { kind: 'model', provider: 'deepseek', model: 'chat' }, content: [{ type: 'text', text: 'old answer' }] },
@@ -287,6 +261,9 @@ test('direct adapter sends only the latest real user task and returns the FlowTe
     ],
   })) chunks.push(chunk)
   assert.equal(createdBody.goal, 'do the complete new task')
+  assert.equal(createdBody.conversationId, 'dsh-session-42')
+  assert.equal(createdBody.presentation, 'agent_view')
+  assert.equal(createdBody.runOptions.fullAgentExecution, true)
   assert.deepEqual(chunks, [
     { type: 'block-start', index: 0, blockType: 'text' },
     { type: 'text-delta', index: 0, text: 'FlowText finished everything' },
@@ -296,56 +273,40 @@ test('direct adapter sends only the latest real user task and returns the FlowTe
   ])
 })
 
-test('provider resolves a FlowText approval with the configured fail-closed decision', async () => {
-  let decision
-  let status = 'waiting_approval'
-  const baseUrl = await gateway(async (req, res) => {
-    if (req.method === 'POST' && req.url === '/flowtext-agent/v1/tasks') {
-      json(res, 202, { task: { taskId: 'flow-approval', clientId: 'test-harness', status, lastSeq: 2, pendingApproval: { requestId: 'approval-1', kind: 'external_action', command: 'Edit A.md' } } })
-      return
-    }
-    if (req.method === 'POST' && req.url.endsWith('/approvals/approval-1/resolve')) {
-      const chunks = []
-      for await (const chunk of req) chunks.push(chunk)
-      decision = JSON.parse(Buffer.concat(chunks).toString('utf8')).decision
-      status = 'completed'
-      json(res, 200, { task: { taskId: 'flow-approval', status: 'running', lastSeq: 4 } })
-      return
-    }
-    if (req.url.includes('/events?')) {
-      json(res, 200, { taskId: 'flow-approval', events: [], lastSeq: 4 })
-      return
-    }
-    if (req.url === '/flowtext-agent/v1/tasks/flow-approval') {
-      json(res, 200, { task: { taskId: 'flow-approval', clientId: 'test-harness', status, lastSeq: 5, result: { success: true, answer: 'Write was denied safely' } } })
-      return
-    }
-    throw new Error(`unexpected route ${req.method} ${req.url}`)
-  })
-  const run = await startFlowTextRun(request(), runSpec(client(baseUrl)))
-  assert.equal((await run.result).stopReason, 'completed')
-  assert.equal(decision, 'deny')
-})
-
-test('provider cancels a task that requires unsupported user clarification', async () => {
+test('direct run waits for FlowText UI clarification instead of cancelling it', async () => {
+  let status = 'waiting_input'
   let cancelled = false
   const baseUrl = await gateway(async (req, res) => {
     if (req.method === 'POST' && req.url === '/flowtext-agent/v1/tasks') {
-      json(res, 202, { task: { taskId: 'flow-input', clientId: 'test-harness', status: 'waiting_input', lastSeq: 3, pendingInteraction: { requestId: 'ask-1' } } })
+      json(res, 202, { task: { taskId: 'flow-ui-input', clientId: 'test-harness', status, lastSeq: 3, pendingInteraction: { requestId: 'ask-ui-1' } } })
+      return
+    }
+    if (req.url.includes('/events?')) {
+      status = 'completed'
+      json(res, 200, { taskId: 'flow-ui-input', events: [{ taskId: 'flow-ui-input', seq: 4, type: 'interaction.answered', timestamp: 1 }], lastSeq: 4 })
+      return
+    }
+    if (req.url === '/flowtext-agent/v1/tasks/flow-ui-input') {
+      json(res, 200, { task: { taskId: 'flow-ui-input', clientId: 'test-harness', status, lastSeq: 5, result: { success: true, answer: 'continued in FlowText UI' } } })
       return
     }
     if (req.method === 'POST' && req.url.endsWith('/cancel')) {
       cancelled = true
-      json(res, 200, { task: { taskId: 'flow-input', status: 'cancelled', lastSeq: 4 } })
+      json(res, 200, { task: { taskId: 'flow-ui-input', status: 'cancelled', lastSeq: 6 } })
       return
     }
     throw new Error(`unexpected route ${req.method} ${req.url}`)
   })
-  const run = await startFlowTextRun(request(), runSpec(client(baseUrl)))
-  const result = await run.result
-  assert.equal(result.stopReason, 'error')
-  assert.match(result.diagnostic, /FLOWTEXT_INPUT_REQUIRED/)
-  assert.equal(cancelled, true)
+  const run = await startFlowTextRun(
+    request(),
+    runSpec(client(baseUrl)),
+    { conversationId: 'dsh-session-ui' },
+  )
+  assert.deepEqual(await run.result, {
+    output: [{ type: 'text', text: 'continued in FlowText UI' }],
+    stopReason: 'completed',
+  })
+  assert.equal(cancelled, false)
 })
 
 test('request cancellation cancels the remote task and dispose reaches settlement', async () => {

@@ -1,8 +1,21 @@
-import type { ResolvedSubagentStartRequest, SubagentRun } from '@deepseek-ai/dsh-subagent';
+import type { ContentBlock } from '@deepseek-ai/dsh-llm';
 import { FlowTextClient } from './client.js';
 import type { FlowTextRunPolicy } from './protocol.js';
-/** How unattended FlowText approval requests are resolved. */
-export type FlowTextApprovalDecision = 'deny' | 'once' | 'session';
+export type FlowTextStopReason = 'completed' | 'aborted' | 'error';
+export interface FlowTextRunRequest {
+    readonly prompt: readonly ContentBlock[];
+    readonly signal: AbortSignal;
+}
+export interface FlowTextRunResult {
+    readonly output: ContentBlock[];
+    readonly stopReason: FlowTextStopReason;
+    readonly diagnostic?: string;
+}
+export interface FlowTextRun {
+    readonly id: string;
+    readonly result: Promise<FlowTextRunResult>;
+    dispose(): Promise<void>;
+}
 /** Fully resolved inputs for one remote FlowText run. */
 export interface FlowTextRunSpec {
     readonly client: FlowTextClient;
@@ -12,15 +25,16 @@ export interface FlowTextRunSpec {
     readonly contextPaths: readonly string[];
     readonly policy: FlowTextRunPolicy;
     readonly runOptions: Readonly<Record<string, unknown>>;
-    readonly approvalDecision: FlowTextApprovalDecision;
     readonly maxPromptBytes: number;
     readonly maxAnswerBytes: number;
     readonly onError?: (error: Error) => void;
 }
 /**
  * Publish one remote FlowText task and own it until terminal settlement.
- * @param request - resolved one-shot Harness delegation.
- * @param spec - client, authority, bounds, and unattended approval policy.
- * @returns a remote SubagentRun whose disposal cancels and awaits the task.
+ * @param request - the latest DSH user task.
+ * @param spec - client, authority, and response bounds.
+ * @returns an owned FlowText run whose disposal cancels and awaits the task.
  */
-export declare function startFlowTextRun(request: ResolvedSubagentStartRequest, spec: FlowTextRunSpec): Promise<SubagentRun>;
+export declare function startFlowTextRun(request: FlowTextRunRequest, spec: FlowTextRunSpec, context?: {
+    readonly conversationId?: string;
+}): Promise<FlowTextRun>;

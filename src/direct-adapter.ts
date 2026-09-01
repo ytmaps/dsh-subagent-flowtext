@@ -6,15 +6,12 @@ import {
   type ResolvedRetryPolicy,
   type StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import type { ResolvedSubagentStartRequest, SubagentResult } from '@deepseek-ai/dsh-subagent'
-import { startFlowTextRun, type FlowTextRunSpec } from './run.js'
+import { startFlowTextRun, type FlowTextRunResult, type FlowTextRunSpec } from './run.js'
 
 /** Stable DSH route used when FlowText owns the whole task loop. */
 export const FLOWTEXT_DIRECT_PROVIDER = 'flowtext-direct'
 /** Display-only model id for the remote FlowText agent. */
 export const FLOWTEXT_DIRECT_MODEL = 'flowtext-agent'
-
-type ResultWithDiagnostic = SubagentResult & { readonly diagnostic?: string }
 
 function latestUserTask(options: GenerateOptions): string {
   const message = options.messages.findLast(item => item.role === 'user' && item.source.kind === 'user')
@@ -31,7 +28,7 @@ function latestUserTask(options: GenerateOptions): string {
   return goal
 }
 
-function failure(result: ResultWithDiagnostic): { message: string; code: string } {
+function failure(result: FlowTextRunResult): { message: string; code: string } {
   const message = result.diagnostic?.trim() || `FlowText task ended with ${result.stopReason}`
   return {
     message,
@@ -86,14 +83,14 @@ export class FlowTextDirectAdapter extends LlmAdapter {
     }
     const signal = options.signal ?? new AbortController().signal
     const request = {
-      prompt: [{ type: 'text', text: latestUserTask(options) }],
+      prompt: [{ type: 'text' as const, text: latestUserTask(options) }],
       signal,
-      descriptor: {},
-      parent: {},
-    } as unknown as ResolvedSubagentStartRequest
-    const run = await startFlowTextRun(request, this.spec)
+    }
+    const run = await startFlowTextRun(request, this.spec, {
+      ...(options.sessionId === undefined ? {} : { conversationId: String(options.sessionId) }),
+    })
     try {
-      const result = await run.result as ResultWithDiagnostic
+      const result = await run.result
       if (result.stopReason !== 'completed') {
         yield {
           type: 'finish',

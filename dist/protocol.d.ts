@@ -26,6 +26,8 @@ export interface FlowTextTaskContext {
 export interface FlowTextCreateTaskRequest {
     readonly clientId: string;
     readonly requestId: string;
+    readonly conversationId?: string;
+    readonly presentation?: 'background' | 'agent_view';
     readonly goal: string;
     readonly modelId?: string;
     readonly context?: FlowTextTaskContext;
@@ -48,6 +50,8 @@ export interface FlowTextTaskSnapshot {
     readonly taskId: string;
     readonly clientId: string;
     readonly requestId?: string;
+    readonly conversationId?: string;
+    readonly presentation?: 'background' | 'agent_view';
     readonly status: FlowTextTaskStatus;
     readonly lastSeq: number;
     readonly result?: FlowTextTaskResult;

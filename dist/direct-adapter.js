@@ -75,10 +75,10 @@ export class FlowTextDirectAdapter extends LlmAdapter {
         const request = {
             prompt: [{ type: 'text', text: latestUserTask(options) }],
             signal,
-            descriptor: {},
-            parent: {},
         };
-        const run = await startFlowTextRun(request, this.spec);
+        const run = await startFlowTextRun(request, this.spec, {
+            ...(options.sessionId === undefined ? {} : { conversationId: String(options.sessionId) }),
+        });
         try {
             const result = await run.result;
             if (result.stopReason !== 'completed') {

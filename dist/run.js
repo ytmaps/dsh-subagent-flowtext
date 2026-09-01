@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { SessionId } from '@deepseek-ai/dsh-session';
 import { FlowTextClient, FlowTextClientError } from './client.js';
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out', 'interrupted']);
 function utf8Bytes(value) {
@@ -47,8 +46,7 @@ function taskStopReason(task) {
     }
 }
 function failedResult(stopReason, diagnostic, output = []) {
-    const result = { output, stopReason, diagnostic };
-    return result;
+    return { output, stopReason, diagnostic };
 }
 function taskResult(task, maxAnswerBytes) {
     const reason = taskStopReason(task);
@@ -66,14 +64,10 @@ async function waitForTerminal(task, spec, signal) {
     let snapshot = task;
     let after = task.lastSeq;
     while (!TERMINAL_STATUSES.has(snapshot.status)) {
-        if (snapshot.status === 'waiting_input') {
-            throw new Error('FLOWTEXT_INPUT_REQUIRED: the remote task requires user input');
-        }
         if (snapshot.status === 'waiting_approval') {
             const approval = snapshot.pendingApproval;
             if (approval === undefined)
                 throw new Error('FLOWTEXT_INVALID_APPROVAL: task is waiting without approval details');
-            await spec.client.resolveApproval(snapshot.taskId, approval.requestId, spec.approvalDecision, signal);
         }
         const events = await spec.client.waitForEvents(snapshot.taskId, after, signal);
         after = Math.max(after, events.lastSeq);
@@ -83,20 +77,23 @@ async function waitForTerminal(task, spec, signal) {
 }
 /**
  * Publish one remote FlowText task and own it until terminal settlement.
- * @param request - resolved one-shot Harness delegation.
- * @param spec - client, authority, bounds, and unattended approval policy.
- * @returns a remote SubagentRun whose disposal cancels and awaits the task.
+ * @param request - the latest DSH user task.
+ * @param spec - client, authority, and response bounds.
+ * @returns an owned FlowText run whose disposal cancels and awaits the task.
  */
-export async function startFlowTextRun(request, spec) {
+export async function startFlowTextRun(request, spec, context = {}) {
     if (request.signal.aborted)
         throw new Error('subagent-flowtext: request was aborted before task creation');
     const goal = promptText(request.prompt);
     if (utf8Bytes(goal) > spec.maxPromptBytes)
         throw new Error('subagent-flowtext: prompt exceeds maxPromptBytes');
     const requestId = randomUUID();
+    const conversationId = String(context.conversationId || requestId);
     const initial = await spec.client.createTask({
         clientId: spec.clientId,
         requestId,
+        conversationId,
+        presentation: 'agent_view',
         goal,
         ...(spec.modelId === undefined ? {} : { modelId: spec.modelId }),
         context: {
@@ -104,7 +101,7 @@ export async function startFlowTextRun(request, spec) {
             ...(spec.contextPaths.length === 0 ? {} : { paths: spec.contextPaths }),
         },
         policy: spec.policy,
-        runOptions: spec.runOptions,
+        runOptions: { ...spec.runOptions, fullAgentExecution: true },
     }, request.signal);
     const controller = new AbortController();
     let cancelPromise;
@@ -138,8 +135,7 @@ export async function startFlowTextRun(request, spec) {
     });
     let disposePromise;
     return {
-        id: SessionId(initial.taskId),
-        localAgent: undefined,
+        id: initial.taskId,
         result,
         dispose() {
             disposePromise ??= (async () => {
