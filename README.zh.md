@@ -19,6 +19,14 @@
 dsh plugin --profile web add dsh-subagent-flowtext
 ```
 
+在发布到 npm 注册表之前，可直接从公开 GitHub 仓库安装：
+
+```sh
+dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
+```
+
+GitHub 安装会通过 `prepare` 构建 TypeScript 源码。pnpm 10 及更高版本会默认禁止依赖构建脚本；如果首次命令输出 `allowBuilds` 提示，请把它打印的精确包键加入该 Profile 的 `pnpm-workspace.yaml`，然后重新执行安装命令。生产部署建议锁定具体 commit，避免自动跟随 `main` 后续变更。
+
 安装后的 Provider 配置行默认禁用，防止尚未配置令牌时导致 Harness 启动失败。请在仓库外设置令牌，然后在 Profile 的 `cordis.patch.yml` 中替换或启用该配置行：
 
 ```sh
