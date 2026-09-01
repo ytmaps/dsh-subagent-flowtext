@@ -26,10 +26,9 @@ repository:
 dsh plugin --profile web add github:ytmaps/dsh-subagent-flowtext
 ```
 
-Git-hosted installation builds the TypeScript source through `prepare`. pnpm
-10 or newer blocks dependency build scripts until explicitly allowed. If the
-first command prints an `allowBuilds` key, add the exact key to that Profile's
-`pnpm-workspace.yaml`, then run the command again. Pin a commit when a deployment
+The repository includes reviewed, precompiled `dist` entry points, so a
+GitHub-source or marketplace installation does not execute a dependency build
+script and needs no pnpm `allowBuilds` grant. Pin a commit when a deployment
 must not follow later changes to `main`.
 
 The bundled provider row is disabled after installation because it cannot start safely without a token. Set the token outside the repository, then replace or enable the row in the Profile's `cordis.patch.yml`:
@@ -72,6 +71,16 @@ Restart the Profile after editing its composition. The parent model can then del
 
 Repository maintainers should follow [PUBLISHING.md](PUBLISHING.md) for the
 first npm publication and subsequent tokenless GitHub Actions releases.
+
+## Marketplace discovery
+
+DeepSeek Harness currently uses the GitHub `dsh-plugin` topic as its official
+community-discovery convention; its built-in Plugins settings page is an
+inventory of already installed Loader entries, not an official download
+marketplace. Independent community marketplaces can index this repository and
+install it directly from GitHub with the source command above. A marketplace
+listing is not a DeepSeek security endorsement; review this package and its
+requested FlowText policy before installation.
 
 ## Configuration
 
