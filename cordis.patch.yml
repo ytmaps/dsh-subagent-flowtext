@@ -1,0 +1,8 @@
+# Install-time bundle: dormant until the Profile supplies a Gateway token and enables the row.
+- insert:
+    - id: subagent-flowtext
+      name: dsh-subagent-flowtext
+      disabled: true
+      config:
+        providerName: flowtext
+        token: !!js process.env.FLOWTEXT_AGENT_TOKEN
